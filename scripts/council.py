@@ -14,7 +14,7 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional, List
 
 # ============================================================================
 # Data Classes
@@ -29,13 +29,13 @@ class LLMResponse:
     cost_usd: float
     latency_ms: int
     success: bool
-    error: str | None = None
+    error: Optional[str] = None
 
 @dataclass
 class SessionConfig:
     query: str
     mode: str
-    models: list[str]
+    models: List[str]
     chairman: str
     timeout: int
     anonymize: bool
@@ -145,7 +145,7 @@ async def query_codex(prompt: str, timeout: int) -> LLMResponse:
     start = time.time()
     try:
         proc = await asyncio.create_subprocess_exec(
-            'codex', '-q', prompt,
+            'codex', prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
