@@ -11,7 +11,13 @@ Orchestrate collective intelligence from Claude Opus, Gemini Pro, and Codex thro
 
 When user triggers council (e.g., "ask the council: Should we use TypeScript?"):
 
+**IMPORTANT**: Always use ALL 3 models (Claude, Gemini, Codex) and Claude as chairman for synthesis.
+
+**IMPORTANT**: Provide progress updates to user as each model responds.
+
 ### Stage 1: Gather Opinions (Parallel)
+
+**Tell user**: "Consulting the council (Claude Opus, Gemini Pro, Codex)..."
 
 Execute these queries in parallel using Bash tool:
 
@@ -49,7 +55,14 @@ EOF
 
 Also provide your own Claude Opus analysis in the same JSON format.
 
+**After each model responds, tell user**:
+- "✓ Gemini Pro responded (12.3s)"
+- "✓ Codex responded (3.1s)"
+- "✓ Claude Opus analysis complete"
+
 ### Stage 2: Peer Review (Anonymized)
+
+**Tell user**: "Conducting anonymous peer review..."
 
 Anonymize the 3 responses by shuffling and labeling them A, B, C.
 
@@ -60,6 +73,8 @@ Score each response on:
 - **Clarity** (1-5): Communication effectiveness
 
 Identify contradictions: "Response A claims X while Response B claims Y"
+
+**Tell user**: "Peer review complete. Synthesizing consensus..."
 
 ### Stage 3: Synthesis
 
@@ -212,13 +227,17 @@ Execute:
 ```bash
 gemini "Your prompt here"
 ```
-Returns plain text response.
+Returns plain text response. **Always use in parallel with Codex.**
 
 ### Codex
 ```bash
 codex exec "Your prompt here"
 ```
-Use `exec` subcommand for non-interactive mode.
+Use `exec` subcommand for non-interactive mode. **Always use in parallel with Gemini.**
+
+### Chairman Default
+**Always use Claude as chairman** for synthesis (Stage 2 peer review + Stage 3 synthesis).
+Chairman must be different from opinion-gathering models when possible.
 
 ### Error Handling for CLIs
 If CLI not available or times out:
