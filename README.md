@@ -9,8 +9,8 @@ Enable Claude to coordinate opinions from multiple AI models (Claude variants, G
 ### 1. Clone this skill repository
 
 ```bash
-git clone https://github.com/yourusername/council-board-skill.git
-cd council-board-skill
+git clone https://github.com/bacoco/Council-board-skill.git
+cd Council-board-skill
 ```
 
 ### 2. Skill is ready to use
