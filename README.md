@@ -1,6 +1,8 @@
 # Council Board - Multi-Model Deliberation Skill
 
-Multi-model deliberation orchestrator for Claude Code. Coordinates opinions from **Claude Opus 4.5**, **Gemini Pro**, and **Codex** through multi-round deliberation, persona-based analysis, anonymous peer review, and synthesis.
+**Personal development skill** for Claude Code that coordinates opinions from **Claude Opus 4.5**, **Gemini Pro**, and **Codex** through multi-round deliberation, persona-based analysis, anonymous peer review, and synthesis.
+
+> **Use Case**: This is a personal exploration tool designed for single-user scenarios with trusted input. It uses your own authenticated CLI tools on your local machine. Not designed for production use or untrusted input scenarios.
 
 ## Installation
 
@@ -106,13 +108,14 @@ are "unequivocally better" - empirical evidence from Shopify,
 GitHub, Basecamp contradicts this.
 ```
 
-## Transparency & Source Code
+## Personal Development Tool
 
+- **Use case**: Personal skill for single-user exploration with your own authenticated CLIs
 - **License**: MIT (open source)
 - **Source code**: All code is visible in this repository
-- **Privacy**: All deliberation happens via your authenticated CLIs - no data sent to third parties
-- **CLI authentication**: OAuth flows managed by official Anthropic, Google, and OpenAI CLIs
-- **No secrets**: Automatic redaction of API keys, tokens, passwords in queries
+- **Privacy**: All deliberation happens locally via your CLI tools - no external services
+- **CLI authentication**: Uses your own OAuth-authenticated Anthropic, Google, and OpenAI CLIs
+- **Trusted input**: Designed for your own queries on your own machine - no untrusted input handling needed
 
 ## Documentation
 
@@ -130,12 +133,12 @@ GitHub, Basecamp contradicts this.
 7. **Synthesis**: Chairman produces final answer integrating all perspectives
 8. **Output**: Claude Code displays results to you with confidence scores and dissenting views
 
-## Security Features
+## Design Features
 
-- **Secret redaction**: Automatically removes API keys, tokens, passwords from queries
-- **Prompt injection detection**: Warns if query contains "ignore previous instructions" patterns
-- **Anonymized peer review**: Prevents brand bias by shuffling responses as A, B, C
-- **Audit trail**: NDJSON event log for every session (if needed for debugging)
+- **Anonymized peer review**: Prevents brand bias by shuffling responses as A, B, C before scoring
+- **Audit trail**: NDJSON event log for every session (useful for debugging and analysis)
+- **Convergence detection**: Automatically stops iteration when models reach agreement (saves time and cost)
+- **Multi-round feedback**: Models see each other's arguments and provide rebuttals
 
 ## Test Results
 
