@@ -10,6 +10,7 @@ import functools
 import json
 import random
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -32,6 +33,14 @@ DEFAULT_TIMEOUT = 60  # Default timeout in seconds for CLI calls
 
 # Pre-compiled regex patterns (performance optimization)
 JSON_PATTERN = re.compile(r'\{[\s\S]*\}')  # Extract JSON from text
+
+# Performance instrumentation
+ENABLE_PERF_INSTRUMENTATION = False  # Set to True to emit timing metrics
+
+def emit_perf_metric(func_name: str, elapsed_ms: float, **kwargs):
+    """Emit performance metric event if instrumentation enabled."""
+    if ENABLE_PERF_INSTRUMENTATION:
+        emit({"type": "perf_metric", "function": func_name, "elapsed_ms": elapsed_ms, **kwargs})
 
 # ============================================================================
 # Data Classes
@@ -154,12 +163,40 @@ class CLIConfig:
 
 @functools.lru_cache(maxsize=32)
 def check_cli_available(cli: str) -> bool:
-    """Check if a CLI tool is available in PATH. Results are cached."""
+    """
+    Check if a CLI tool is available in PATH. Results are cached.
+
+    Synchronous version for use in non-async contexts (e.g., main() startup).
+    """
+    start = time.perf_counter()
     try:
-        result = subprocess.run(['which', cli], capture_output=True, timeout=5)
-        return result.returncode == 0
+        # Use shutil.which() instead of subprocess for better cross-platform support
+        result = shutil.which(cli)
+        available = result is not None
     except Exception:
-        return False
+        available = False
+
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    emit_perf_metric("check_cli_available", elapsed_ms, cli=cli, available=available)
+    return available
+
+async def check_cli_available_async(cli: str) -> bool:
+    """
+    Async version of CLI availability check. Non-blocking.
+
+    Uses asyncio.to_thread to run shutil.which() in thread pool.
+    """
+    start = time.perf_counter()
+    try:
+        # Run shutil.which in thread pool to avoid blocking event loop
+        result = await asyncio.to_thread(shutil.which, cli)
+        available = result is not None
+    except Exception:
+        available = False
+
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    emit_perf_metric("check_cli_available_async", elapsed_ms, cli=cli, available=available)
+    return available
 
 def get_available_models(requested_models: List[str]) -> List[str]:
     """
@@ -376,6 +413,50 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
             error=str(e)
         )
 
+async def query_cli_with_retry(model_name: str, cli_config: CLIConfig, prompt: str, timeout: int, max_retries: int = 3) -> LLMResponse:
+    """
+    Query CLI with exponential backoff retry logic for transient failures.
+
+    Args:
+        model_name: Name of the model
+        cli_config: CLI configuration
+        prompt: The prompt to send
+        timeout: Timeout per attempt in seconds
+        max_retries: Maximum number of retry attempts (default: 3)
+
+    Returns:
+        LLMResponse with content, latency, and success status
+    """
+    last_error = None
+
+    for attempt in range(max_retries):
+        result = await query_cli(model_name, cli_config, prompt, timeout)
+
+        # Success - return immediately
+        if result.success:
+            if attempt > 0:
+                emit_perf_metric("query_retry_success", 0, model=model_name, attempt=attempt + 1)
+            return result
+
+        # Failure - store error and retry if not last attempt
+        last_error = result.error
+
+        if attempt < max_retries - 1:
+            # Exponential backoff with jitter to prevent timing attacks
+            backoff = (2 ** attempt) + random.uniform(0, 1)
+            emit_perf_metric("query_retry_backoff", backoff * 1000, model=model_name, attempt=attempt + 1)
+            await asyncio.sleep(backoff)
+
+    # All retries exhausted - return last failed response
+    emit_perf_metric("query_retry_exhausted", 0, model=model_name, retries=max_retries)
+    return LLMResponse(
+        content='',
+        model=model_name,
+        latency_ms=0,
+        success=False,
+        error=f'All {max_retries} retries failed. Last error: {last_error}'
+    )
+
 # CLI configurations for each model
 CLI_CONFIGS = {
     'claude': CLIConfig(
@@ -395,15 +476,15 @@ CLI_CONFIGS = {
     ),
 }
 
-# Adapter functions (wrappers for backward compatibility)
+# Adapter functions (use retry logic for improved resilience)
 async def query_claude(prompt: str, timeout: int) -> LLMResponse:
-    return await query_cli('claude', CLI_CONFIGS['claude'], prompt, timeout)
+    return await query_cli_with_retry('claude', CLI_CONFIGS['claude'], prompt, timeout, max_retries=3)
 
 async def query_gemini(prompt: str, timeout: int) -> LLMResponse:
-    return await query_cli('gemini', CLI_CONFIGS['gemini'], prompt, timeout)
+    return await query_cli_with_retry('gemini', CLI_CONFIGS['gemini'], prompt, timeout, max_retries=3)
 
 async def query_codex(prompt: str, timeout: int) -> LLMResponse:
-    return await query_cli('codex', CLI_CONFIGS['codex'], prompt, timeout)
+    return await query_cli_with_retry('codex', CLI_CONFIGS['codex'], prompt, timeout, max_retries=3)
 
 ADAPTERS = {
     'claude': query_claude,
