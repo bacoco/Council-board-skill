@@ -1,6 +1,8 @@
-# Claude Code settings
+# Claude Code settings (user-specific)
 .claude/
-.claude-*
+
+# Allow plugin metadata
+!.claude-plugin/
 
 # Python
 __pycache__/

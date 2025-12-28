@@ -1,0 +1,8 @@
+{
+  "name": "council-board",
+  "description": "Multi-model deliberation orchestrator. Coordinates opinions from Claude Opus, Gemini Pro, and Codex through parallel analysis, anonymous peer review, and synthesis.",
+  "author": {
+    "name": "bacoco",
+    "email": "bacoco@users.noreply.github.com"
+  }
+}
