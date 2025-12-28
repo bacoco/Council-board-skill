@@ -530,8 +530,7 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
     for model, result in zip(available_models, results):
         if isinstance(result, Exception):
             emit({"type": "opinion_error", "model": model, "error": str(result), "status": "ABSTENTION"})
-            responses[model] = LLMResponse(content='', model=model, tokens_in=0, tokens_out=0,
-                                          cost_usd=0.0, latency_ms=0, success=False, error=str(result))
+            responses[model] = LLMResponse(content='', model=model, latency_ms=0, success=False, error=str(result))
         else:
             if result.success:
                 emit({"type": "opinion_complete", "model": model, "round": round_num, "latency_ms": result.latency_ms})
@@ -585,6 +584,74 @@ async def synthesize(config: SessionConfig, opinions: dict, review: dict, confli
             return synthesis
 
     return {"final_answer": "Synthesis failed", "confidence": 0.0}
+
+async def meta_synthesize(query: str, consensus_result: dict, debate_result: dict = None, devils_result: dict = None, chairman: str = 'claude', timeout: int = 60) -> dict:
+    """
+    Meta-synthesis combining results from multiple deliberation modes.
+
+    Args:
+        query: Original question
+        consensus_result: Result from consensus mode (always present)
+        debate_result: Result from debate mode (optional)
+        devils_result: Result from devil's advocate mode (optional)
+        chairman: Model to use for meta-synthesis
+        timeout: Timeout in seconds
+
+    Returns:
+        Meta-synthesized result incorporating all modes
+    """
+    emit({"type": "status", "msg": "Meta-synthesizing results from multiple deliberation modes..."})
+
+    modes_used = ["consensus"]
+    if debate_result:
+        modes_used.append("debate")
+    if devils_result:
+        modes_used.append("devil's advocate")
+
+    prompt = f"""<s>You are Chairman conducting meta-synthesis of multiple deliberation modes.</s>
+
+<original_question>{query}</original_question>
+
+<consensus_mode_result>
+Answer: {consensus_result.get('synthesis', {}).get('final_answer', '')}
+Confidence: {consensus_result.get('synthesis', {}).get('confidence', 0.0)}
+Convergence: {consensus_result.get('converged', False)} (score: {consensus_result.get('convergence_score', 0.0)})
+Rounds: {consensus_result.get('rounds_completed', 0)}
+</consensus_mode_result>
+
+{f'''<debate_mode_result>
+Answer: {debate_result.get('synthesis', {}).get('final_answer', '')}
+Confidence: {debate_result.get('synthesis', {}).get('confidence', 0.0)}
+FOR/AGAINST perspectives presented
+Dissenting view: {debate_result.get('synthesis', {}).get('dissenting_view', 'None')}
+</debate_mode_result>''' if debate_result else ''}
+
+{f'''<devils_advocate_result>
+Answer: {devils_result.get('synthesis', {}).get('final_answer', '')}
+Confidence: {devils_result.get('synthesis', {}).get('confidence', 0.0)}
+Red Team critiques vs Blue Team defenses
+Purple Team integration: {devils_result.get('synthesis', {}).get('dissenting_view', 'None')}
+</devils_advocate_result>''' if devils_result else ''}
+
+<instructions>
+Synthesize insights from all {len(modes_used)} deliberation modes.
+Modes used: {', '.join(modes_used)}
+
+Produce final meta-synthesis as JSON:
+{{"final_answer": "Integrated answer from all modes",
+"confidence": 0.90,
+"modes_consulted": {modes_used},
+"escalation_justified": true,
+"key_insights_by_mode": {{"consensus": "...", "debate": "...", "devils_advocate": "..."}},
+"remaining_uncertainties": []}}
+</instructions>"""
+
+    if chairman in ADAPTERS and check_cli_available(chairman):
+        result = await ADAPTERS[chairman](prompt, timeout)
+        if result.success:
+            return extract_json(result.content)
+
+    return {"final_answer": "Meta-synthesis failed", "confidence": 0.0}
 
 async def run_council(config: SessionConfig) -> dict:
     session_id = f"council-{int(time.time())}"
@@ -687,6 +754,157 @@ async def run_council(config: SessionConfig) -> dict:
         "convergence_score": convergence_score
     }
 
+async def run_adaptive_cascade(config: SessionConfig) -> dict:
+    """
+    Adaptive tiered cascade methodology - automatically escalates through modes based on convergence.
+
+    Tier 1 (Fast Path): Consensus mode
+    Tier 2 (Quality Gate): + Debate mode if convergence < 0.7
+    Tier 3 (Adversarial Audit): + Devil's Advocate if still ambiguous
+
+    Returns:
+        Final result with meta-synthesis if multiple modes used
+    """
+    emit({"type": "cascade_start", "msg": "Starting adaptive cascade (Tier 1: Consensus)"})
+
+    # Tier 1: Consensus mode (always runs first)
+    consensus_config = SessionConfig(
+        query=config.query,
+        mode='consensus',
+        models=config.models,
+        chairman=config.chairman,
+        timeout=config.timeout,
+        anonymize=config.anonymize,
+        council_budget=config.council_budget,
+        output_level=config.output_level,
+        max_rounds=config.max_rounds,
+        context=config.context
+    )
+
+    consensus_result = await run_council(consensus_config)
+
+    # Check if escalation needed
+    convergence_score = consensus_result.get('convergence_score', 1.0)
+    confidence = consensus_result.get('synthesis', {}).get('confidence', 1.0)
+
+    # Tier 1 exit condition: High convergence (>= 0.7)
+    if convergence_score >= 0.7:
+        emit({
+            "type": "cascade_complete",
+            "tier": 1,
+            "msg": f"Tier 1 sufficient (convergence: {convergence_score:.3f})",
+            "modes_used": ["consensus"]
+        })
+        return consensus_result
+
+    # Tier 2: Escalate to Debate mode
+    emit({
+        "type": "cascade_escalate",
+        "from_tier": 1,
+        "to_tier": 2,
+        "reason": f"Low convergence ({convergence_score:.3f} < 0.7), escalating to debate mode"
+    })
+
+    debate_config = SessionConfig(
+        query=config.query,
+        mode='debate',
+        models=config.models,
+        chairman=config.chairman,
+        timeout=config.timeout,
+        anonymize=config.anonymize,
+        council_budget=config.council_budget,
+        output_level=config.output_level,
+        max_rounds=config.max_rounds,
+        context=config.context
+    )
+
+    debate_result = await run_council(debate_config)
+
+    # Check if further escalation needed
+    debate_convergence = debate_result.get('convergence_score', 1.0)
+    debate_confidence = debate_result.get('synthesis', {}).get('confidence', 1.0)
+
+    # Tier 2 exit condition: Reasonable convergence or high confidence
+    if debate_convergence >= 0.6 or debate_confidence >= 0.85:
+        emit({
+            "type": "cascade_complete",
+            "tier": 2,
+            "msg": f"Tier 2 sufficient (debate convergence: {debate_convergence:.3f}, confidence: {debate_confidence:.3f})",
+            "modes_used": ["consensus", "debate"]
+        })
+
+        # Meta-synthesize consensus + debate
+        meta_result = await meta_synthesize(
+            config.query,
+            consensus_result,
+            debate_result=debate_result,
+            chairman=config.chairman,
+            timeout=config.timeout
+        )
+
+        return {
+            "session_type": "adaptive_cascade",
+            "tiers_used": 2,
+            "modes": ["consensus", "debate"],
+            "consensus_result": consensus_result,
+            "debate_result": debate_result,
+            "meta_synthesis": meta_result,
+            "final_answer": meta_result.get('final_answer', ''),
+            "confidence": meta_result.get('confidence', 0.0)
+        }
+
+    # Tier 3: Escalate to Devil's Advocate mode
+    emit({
+        "type": "cascade_escalate",
+        "from_tier": 2,
+        "to_tier": 3,
+        "reason": f"Persistent ambiguity (debate convergence: {debate_convergence:.3f}), escalating to devil's advocate"
+    })
+
+    devils_config = SessionConfig(
+        query=config.query,
+        mode='devil_advocate',
+        models=config.models,
+        chairman=config.chairman,
+        timeout=config.timeout,
+        anonymize=config.anonymize,
+        council_budget=config.council_budget,
+        output_level=config.output_level,
+        max_rounds=config.max_rounds,
+        context=config.context
+    )
+
+    devils_result = await run_council(devils_config)
+
+    emit({
+        "type": "cascade_complete",
+        "tier": 3,
+        "msg": "Full cascade complete (all 3 modes executed)",
+        "modes_used": ["consensus", "debate", "devil's advocate"]
+    })
+
+    # Meta-synthesize all 3 modes
+    meta_result = await meta_synthesize(
+        config.query,
+        consensus_result,
+        debate_result=debate_result,
+        devils_result=devils_result,
+        chairman=config.chairman,
+        timeout=config.timeout
+    )
+
+    return {
+        "session_type": "adaptive_cascade",
+        "tiers_used": 3,
+        "modes": ["consensus", "debate", "devil's advocate"],
+        "consensus_result": consensus_result,
+        "debate_result": debate_result,
+        "devils_result": devils_result,
+        "meta_synthesis": meta_result,
+        "final_answer": meta_result.get('final_answer', ''),
+        "confidence": meta_result.get('confidence', 0.0)
+    }
+
 # ============================================================================
 # CLI
 # ============================================================================
@@ -695,8 +913,8 @@ def main():
     parser = argparse.ArgumentParser(description='LLM Council - Multi-model deliberation')
     parser.add_argument('--query', '-q', required=True, help='Question to deliberate')
     parser.add_argument('--context', '-c', help='Code or additional context for analysis (optional)')
-    parser.add_argument('--mode', '-m', default='consensus',
-                       choices=['consensus', 'debate', 'vote', 'specialist', 'devil_advocate'])
+    parser.add_argument('--mode', '-m', default='adaptive',
+                       choices=['adaptive', 'consensus', 'debate', 'vote', 'specialist', 'devil_advocate'])
     parser.add_argument('--models', default='claude,gemini,codex', help='Comma-separated model list')
     parser.add_argument('--chairman', default='claude', help='Synthesizer model')
     parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT, help='Per-model timeout (seconds)')
@@ -719,8 +937,12 @@ def main():
         max_rounds=args.max_rounds,
         context=args.context
     )
-    
-    result = asyncio.run(run_council(config))
+
+    # Adaptive cascade or single mode
+    if args.mode == 'adaptive':
+        result = asyncio.run(run_adaptive_cascade(config))
+    else:
+        result = asyncio.run(run_council(config))
     
     if config.output_level == 'audit':
         print(json.dumps(result, indent=2))

@@ -34,17 +34,80 @@ When user triggers council (e.g., "ask the council: Should we use TypeScript?"):
 
 **IMPORTANT**: Provide progress updates showing rounds, personas, and convergence status.
 
+## Adaptive Cascade System (Default)
+
+The Council uses **intelligent auto-escalation** through 3 tiers based on convergence quality:
+
+### Tier 1: Fast Path (Consensus Mode)
+- **Always starts here** for every question
+- Collaborative analysis from 3 perspectives
+- **Exit condition**: Convergence ≥ 0.7 (strong agreement)
+- **Duration**: 2-3 minutes
+- **Handles**: 60-70% of queries (factual, routine, clear-cut questions)
+
+### Tier 2: Quality Gate (+ Debate Mode)
+- **Triggered by**: Convergence < 0.7 from Tier 1
+- **Reason**: Low agreement indicates multiple valid perspectives
+- **Process**: Run adversarial debate (FOR/AGAINST/Neutral)
+- **Exit condition**: Debate convergence ≥ 0.6 OR confidence ≥ 0.85
+- **Duration**: +4-6 minutes (6-9 min total)
+- **Value**: Surfaces blind spots, validates assumptions
+- **Handles**: 25-30% of queries (complex, trade-offs, competing approaches)
+
+### Tier 3: Adversarial Audit (+ Devil's Advocate)
+- **Triggered by**: Still low convergence after Tier 2
+- **Reason**: Persistent ambiguity or high-risk context
+- **Process**: Red Team attacks, Blue Team defends, Purple Team integrates
+- **Duration**: +4-5 minutes (10-15 min total)
+- **Value**: Stress-test proposals, find edge cases
+- **Handles**: 5-10% of queries (security-critical, compliance, novel problems)
+
+### Meta-Synthesis
+- **Activated**: When multiple tiers used (Tier 2 or Tier 3)
+- **Process**: Chairman integrates insights from all modes
+- **Output**: Final answer with mode-by-mode breakdown
+
+**Example escalation flow**:
+```
+Question: "Should we use microservices for our startup?"
+
+Tier 1 (Consensus): 3 models collaborate
+├─ Convergence: 0.52 (LOW - disagreement on best approach)
+└─ Escalate to Tier 2 ✓
+
+Tier 2 (Debate): FOR vs AGAINST microservices
+├─ Convergence: 0.68 (moderate - still some disagreement)
+├─ Confidence: 0.87 (HIGH - both sides well-argued)
+└─ Exit at Tier 2 (confidence threshold met)
+
+Meta-Synthesis: Combines consensus + debate
+└─ Final: "Context-dependent. Modular monolith for <15 engineers..."
+```
+
 ### Invocation
 
 **IMPORTANT**: If user's question references code, files, or specific implementations:
 1. Use Read tool to get the code/files FIRST
 2. Pass code as --context argument to provide full context to all models
 
-**Basic invocation** (no code context):
+**Default invocation** (adaptive cascade - recommended):
 ```bash
 python3 ${SKILL_ROOT}/scripts/council.py \
   --query "[user's question]" \
-  --mode consensus \
+  --mode adaptive
+```
+
+This automatically:
+- Tier 1: Starts with consensus mode
+- Tier 2: Escalates to debate if convergence < 0.7
+- Tier 3: Escalates to devil's advocate if still ambiguous
+- Meta-synthesizes if multiple modes used
+
+**Single mode invocation** (force specific mode):
+```bash
+python3 ${SKILL_ROOT}/scripts/council.py \
+  --query "[user's question]" \
+  --mode consensus  # or debate, devil_advocate
   --max-rounds 3
 ```
 
