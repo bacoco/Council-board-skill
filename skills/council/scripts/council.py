@@ -50,6 +50,9 @@ def emit_perf_metric(func_name: str, elapsed_ms: float, **kwargs):
 # Global PersonaManager instance
 PERSONA_MANAGER = PersonaManager()
 
+# LLM-generated personas toggle
+USE_LLM_GENERATED_PERSONAS = True  # Set to False to use PersonaManager library
+
 # ============================================================================
 # Data Classes
 # ============================================================================
@@ -709,21 +712,38 @@ def anonymize_responses(responses: dict[str, str]) -> tuple[dict[str, str], dict
         mapping[label] = model
     return anonymized, mapping
 
-def extract_json(text: str) -> dict:
-    """Extract JSON from text response, with fallback to raw text. Uses pre-compiled regex."""
+def extract_json(text: str):
+    """
+    Extract JSON from text response, with fallback to raw text.
+
+    Handles both JSON objects {...} and arrays [...].
+    Uses pre-compiled regex.
+    """
     text = text.strip()
-    if text.startswith('{'):
+
+    # Try parsing as-is (works for both objects and arrays)
+    if text.startswith('{') or text.startswith('['):
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
-    # Look for JSON block using pre-compiled pattern
+
+    # Look for JSON block using pre-compiled pattern (objects)
     match = JSON_PATTERN.search(text)
     if match:
         try:
             return json.loads(match.group())
         except json.JSONDecodeError:
             pass
+
+    # Look for JSON array
+    array_match = re.search(r'\[[\s\S]*\]', text)
+    if array_match:
+        try:
+            return json.loads(array_match.group())
+        except json.JSONDecodeError:
+            pass
+
     return {"raw": text}
 
 def get_parsed_json(response: LLMResponse) -> dict:
@@ -755,6 +775,74 @@ def get_base_model(model_instance: str) -> str:
         return model_instance.split('_instance_')[0]
     return model_instance
 
+async def generate_personas_with_llm(query: str, num_models: int, chairman: str, timeout: int = 60) -> List[Persona]:
+    """
+    Generate optimal personas dynamically using LLM (Chairman).
+
+    Instead of using hardcoded persona library, ask the Chairman to create
+    the most relevant expert personas for this specific question.
+
+    Args:
+        query: The question to analyze
+        num_models: Number of personas to generate
+        chairman: Which model to use as Chairman (typically 'claude')
+        timeout: Timeout for LLM call
+
+    Returns:
+        List of dynamically generated Persona objects
+    """
+    prompt = f"""You must respond with ONLY a JSON array. No preamble, no markdown, no explanation.
+
+Generate {num_models} complementary expert personas for this question: {query}
+
+Output format (JSON array only):
+[
+  {{"title": "Expert Name", "role": "What they analyze", "specializations": ["spec1", "spec2"], "prompt_prefix": "You are Expert Name. Your analytical approach..."}},
+  {{"title": "Expert Name 2", "role": "What they analyze", "specializations": ["spec1", "spec2"], "prompt_prefix": "You are Expert Name 2. Your analytical approach..."}}
+]
+
+Be creative and specific to THIS question. Example personas: Computational Ethicist, Game Theorist, Economic Historian, Geopolitical Analyst, etc.
+
+JSON array only, start with [ and end with ]:"""
+
+    emit({"type": "persona_generation", "msg": f"Generating {num_models} personas with {chairman}..."})
+
+    if chairman in ADAPTERS and check_cli_available(chairman):
+        result = await ADAPTERS[chairman](prompt, timeout)
+        if result.success:
+            try:
+                personas_data = get_parsed_json(result)
+
+                # Handle both array and dict responses
+                if isinstance(personas_data, dict) and 'personas' in personas_data:
+                    personas_data = personas_data['personas']
+                elif isinstance(personas_data, dict) and 'raw' in personas_data:
+                    # Failed to parse JSON properly
+                    emit({"type": "persona_generation_failed", "msg": "Failed to parse Chairman response, using fallback"})
+                    return PERSONA_MANAGER.assign_personas(query, num_models)
+
+                personas = []
+                for p in personas_data[:num_models]:  # Ensure we only use requested count
+                    persona = Persona(
+                        title=p.get('title', 'Expert'),
+                        role=p.get('role', 'Analysis'),
+                        prompt_prefix=p.get('prompt_prefix', ''),
+                        specializations=p.get('specializations', [])
+                    )
+                    personas.append(persona)
+
+                emit({"type": "persona_generation_success", "personas": [p.title for p in personas]})
+                return personas
+
+            except Exception as e:
+                emit({"type": "persona_generation_error", "error": str(e)})
+                # Fallback to PersonaManager library
+                return PERSONA_MANAGER.assign_personas(query, num_models)
+
+    # Fallback if chairman unavailable
+    emit({"type": "persona_generation_fallback", "msg": "Chairman unavailable, using PersonaManager"})
+    return PERSONA_MANAGER.assign_personas(query, num_models)
+
 async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None) -> dict[str, LLMResponse]:
     """Gather opinions from all available models in parallel."""
     emit({"type": "status", "stage": 1, "msg": f"Collecting opinions (Round {round_num}, Mode: {config.mode})..."})
@@ -762,9 +850,19 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
     # Dynamically assign personas based on query type (for consensus mode only)
     assigned_personas = None
     if config.mode == 'consensus' and not config.fallback_personas:
-        assigned_personas = PERSONA_MANAGER.assign_personas(config.query, len(config.models))
-        emit({"type": "dynamic_personas", "query_type": PERSONA_MANAGER.analyze_query_type(config.query).value,
-              "personas": [p.title for p in assigned_personas]})
+        if USE_LLM_GENERATED_PERSONAS:
+            # Generate personas using LLM (Chairman decides optimal experts)
+            assigned_personas = await generate_personas_with_llm(
+                config.query,
+                len(config.models),
+                config.chairman,
+                timeout=30
+            )
+        else:
+            # Use PersonaManager library (rule-based assignment)
+            assigned_personas = PERSONA_MANAGER.assign_personas(config.query, len(config.models))
+            emit({"type": "dynamic_personas", "query_type": PERSONA_MANAGER.analyze_query_type(config.query).value,
+                  "personas": [p.title for p in assigned_personas]})
 
     tasks = []
     available_models = []
