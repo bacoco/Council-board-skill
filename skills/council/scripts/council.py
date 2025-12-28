@@ -82,6 +82,29 @@ class SessionConfig:
     max_rounds: int
     context: Optional[str] = None  # Code or additional context for analysis
 
+@dataclass
+class VoteBallot:
+    """A single vote from a model in Vote mode."""
+    model: str
+    vote: str  # The option chosen (e.g., "A", "B", "C" or custom option)
+    weight: float  # Confidence/reliability weight (0.0-1.0)
+    justification: str  # Reasoning for the vote
+    confidence: float  # Self-reported confidence
+    latency_ms: int
+
+@dataclass
+class VoteResult:
+    """Aggregated result from Vote mode deliberation."""
+    winning_option: str
+    vote_counts: dict  # {option: count}
+    weighted_scores: dict  # {option: weighted_score}
+    total_votes: int
+    quorum_met: bool
+    margin: float  # Winning margin as percentage
+    ballots: List[VoteBallot]
+    tie_broken: bool
+    tie_breaker_method: Optional[str] = None
+
 # ============================================================================
 # Persona System
 # ============================================================================
@@ -487,6 +510,100 @@ Resolve contradictions OR present alternatives. Respond with JSON:
 "confidence": 0.85,
 "dissenting_view": null,
 "rounds_analyzed": {len(all_rounds) if all_rounds else 1}}}
+</instructions>"""
+
+def build_vote_prompt(query: str, options: List[str] = None, dynamic_persona: Persona = None, code_context: str = None) -> str:
+    """Build prompt for Vote mode - models cast weighted votes with justification."""
+
+    # Persona prefix
+    persona_prefix = ""
+    if dynamic_persona:
+        persona_prefix = f"<persona>\n{dynamic_persona.prompt_prefix}\nRole: {dynamic_persona.role}\n</persona>\n\n"
+
+    # Code context if provided
+    code_context_block = ""
+    if code_context:
+        code_context_block = f"""
+<code_context>
+{code_context}
+</code_context>
+
+"""
+
+    # Options block - if specific options provided, list them
+    options_block = ""
+    if options:
+        options_list = "\n".join(f"  - Option {chr(65+i)}: {opt}" for i, opt in enumerate(options))
+        options_block = f"""
+<voting_options>
+{options_list}
+</voting_options>
+
+"""
+    else:
+        options_block = """
+<voting_options>
+Determine the best options from the question and vote for one.
+You may propose your own option if none of the implicit options are satisfactory.
+</voting_options>
+
+"""
+
+    return f"""<s>You are a voting council member. Cast your vote with justification.</s>
+
+{persona_prefix}{code_context_block}<voting_question>
+{query}
+</voting_question>
+
+{options_block}<instructions>
+Analyze the question carefully from your expert perspective.
+Cast ONE vote for your preferred option.
+Weight your vote by your confidence (0.0-1.0).
+
+Respond ONLY with JSON:
+{{"vote": "A",
+"justification": "Clear reasoning for your choice (2-3 sentences)",
+"confidence": 0.85,
+"alternative_considered": "B",
+"risks_of_chosen": ["potential downside 1"],
+"would_veto": false}}
+</instructions>
+
+<reminder>Vote based on technical merit, not popularity. Your vote carries weight.</reminder>"""
+
+def build_vote_synthesis_prompt(query: str, ballots: List[dict], vote_counts: dict, weighted_scores: dict, winner: str) -> str:
+    """Build prompt for Chairman to synthesize vote results."""
+
+    ballots_summary = "\n".join(
+        f"- {b['model']}: Voted {b['vote']} (confidence: {b['confidence']}) - {b['justification'][:100]}..."
+        for b in ballots
+    )
+
+    return f"""<s>You are Chairman. Synthesize the council's voting results.</s>
+
+<original_question>{query}</original_question>
+
+<vote_results>
+Winner: {winner}
+Vote counts: {json.dumps(vote_counts)}
+Weighted scores: {json.dumps(weighted_scores)}
+</vote_results>
+
+<individual_ballots>
+{ballots_summary}
+</individual_ballots>
+
+<instructions>
+Explain why the council voted this way.
+Highlight key arguments from voters.
+Note any significant dissent.
+
+Respond with JSON:
+{{"final_answer": "The council recommends [winner] because...",
+"winning_rationale": "Key arguments that won",
+"dissenting_concerns": ["concerns from minority voters"],
+"confidence": 0.85,
+"recommendation_strength": "strong|moderate|weak"}}
 </instructions>"""
 
 def build_context_from_previous_rounds(current_model: str, opinions: dict[str, str], anonymize: bool = True, mode: str = 'consensus') -> str:
@@ -1015,6 +1132,248 @@ async def run_council(config: SessionConfig) -> dict:
         "convergence_score": convergence_score
     }
 
+# ============================================================================
+# Vote Mode Implementation
+# ============================================================================
+
+async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
+    """
+    Collect votes from all models in parallel.
+
+    Each model casts a weighted vote with justification.
+    Returns list of VoteBallot objects.
+    """
+    emit({"type": "status", "stage": 1, "msg": "Collecting votes from council members..."})
+
+    # Generate vote-specific personas
+    assigned_personas = await generate_personas_with_llm(
+        config.query,
+        len(config.models),
+        config.chairman,
+        mode='vote',
+        timeout=30
+    )
+
+    tasks = []
+    available_models = []
+    model_index = 0
+
+    for model_instance in config.models:
+        base_model = get_base_model(model_instance)
+
+        if base_model in ADAPTERS and check_cli_available(base_model):
+            available_models.append(model_instance)
+
+            # Get persona for this voter
+            dynamic_persona = None
+            if assigned_personas and model_index < len(assigned_personas):
+                dynamic_persona = assigned_personas[model_index]
+
+            persona_title = dynamic_persona.title if dynamic_persona else model_instance
+            emit({"type": "vote_start", "model": model_instance, "persona": persona_title})
+
+            prompt = build_vote_prompt(
+                config.query,
+                options=None,  # Let models determine options from query
+                dynamic_persona=dynamic_persona,
+                code_context=config.context
+            )
+
+            tasks.append(ADAPTERS[base_model](prompt, config.timeout))
+            model_index += 1
+
+    # Execute votes in parallel
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    ballots = []
+    for model_instance, result in zip(available_models, results):
+        if isinstance(result, Exception):
+            emit({"type": "vote_error", "model": model_instance, "error": str(result)})
+            continue
+
+        if result.success:
+            try:
+                vote_data = get_parsed_json(result)
+                ballot = VoteBallot(
+                    model=model_instance,
+                    vote=vote_data.get('vote', 'ABSTAIN'),
+                    weight=vote_data.get('confidence', 0.5),  # Use confidence as weight
+                    justification=vote_data.get('justification', ''),
+                    confidence=vote_data.get('confidence', 0.5),
+                    latency_ms=result.latency_ms
+                )
+                ballots.append(ballot)
+                emit({
+                    "type": "vote_cast",
+                    "model": model_instance,
+                    "vote": ballot.vote,
+                    "weight": round(ballot.weight, 2),
+                    "latency_ms": result.latency_ms
+                })
+            except Exception as e:
+                emit({"type": "vote_parse_error", "model": model_instance, "error": str(e)})
+        else:
+            emit({"type": "vote_error", "model": model_instance, "error": result.error})
+
+    return ballots
+
+def tally_votes(ballots: List[VoteBallot]) -> Tuple[dict, dict, str, bool, str]:
+    """
+    Tally votes with weighted scoring.
+
+    Returns:
+        (vote_counts, weighted_scores, winner, tie_broken, tie_breaker_method)
+    """
+    vote_counts = {}
+    weighted_scores = {}
+
+    for ballot in ballots:
+        vote = ballot.vote
+        weight = ballot.weight
+
+        vote_counts[vote] = vote_counts.get(vote, 0) + 1
+        weighted_scores[vote] = weighted_scores.get(vote, 0.0) + weight
+
+    if not weighted_scores:
+        return {}, {}, "NO_VOTES", False, None
+
+    # Find winner by weighted score
+    sorted_options = sorted(weighted_scores.items(), key=lambda x: (-x[1], -vote_counts.get(x[0], 0)))
+
+    # Check for tie
+    tie_broken = False
+    tie_breaker_method = None
+
+    if len(sorted_options) >= 2:
+        top_score = sorted_options[0][1]
+        second_score = sorted_options[1][1]
+
+        if abs(top_score - second_score) < 0.01:  # Tie within 0.01
+            # Tie-breaker 1: Raw vote count
+            top_count = vote_counts.get(sorted_options[0][0], 0)
+            second_count = vote_counts.get(sorted_options[1][0], 0)
+
+            if top_count > second_count:
+                tie_broken = True
+                tie_breaker_method = "raw_vote_count"
+            else:
+                # Tie-breaker 2: Chairman preference (first in list wins)
+                tie_broken = True
+                tie_breaker_method = "chairman_preference"
+
+    winner = sorted_options[0][0]
+
+    return vote_counts, weighted_scores, winner, tie_broken, tie_breaker_method
+
+async def run_vote_council(config: SessionConfig) -> dict:
+    """
+    Run Vote mode deliberation.
+
+    Fast-path voting where each model casts a weighted vote.
+    Single round, parallel execution, immediate tally.
+
+    Returns:
+        VoteResult with winner, counts, and synthesis
+    """
+    session_id = f"vote-{int(time.time())}"
+    start_time = time.time()
+
+    emit({"type": "status", "stage": 0, "msg": f"Starting vote session {session_id}"})
+
+    # Stage 1: Collect votes in parallel
+    ballots = await collect_votes(config)
+
+    # Check quorum
+    if len(ballots) < MIN_QUORUM:
+        emit({"type": "error", "msg": f"Vote quorum not met (got {len(ballots)}, need {MIN_QUORUM})"})
+        return {"error": "Vote quorum not met", "ballots": len(ballots), "required": MIN_QUORUM}
+
+    emit({"type": "quorum_met", "votes": len(ballots), "required": MIN_QUORUM})
+
+    # Stage 2: Tally votes
+    vote_counts, weighted_scores, winner, tie_broken, tie_breaker_method = tally_votes(ballots)
+
+    # Calculate margin
+    total_weight = sum(weighted_scores.values())
+    winner_weight = weighted_scores.get(winner, 0)
+    margin = (winner_weight / total_weight * 100) if total_weight > 0 else 0
+
+    emit({
+        "type": "vote_tally",
+        "winner": winner,
+        "vote_counts": vote_counts,
+        "weighted_scores": {k: round(v, 3) for k, v in weighted_scores.items()},
+        "margin": round(margin, 1),
+        "tie_broken": tie_broken,
+        "tie_breaker": tie_breaker_method
+    })
+
+    # Stage 3: Chairman synthesizes result
+    emit({"type": "status", "stage": 2, "msg": "Chairman synthesizing vote results..."})
+
+    ballots_dict = [
+        {"model": b.model, "vote": b.vote, "confidence": b.confidence, "justification": b.justification}
+        for b in ballots
+    ]
+
+    synthesis_prompt = build_vote_synthesis_prompt(
+        config.query,
+        ballots_dict,
+        vote_counts,
+        {k: round(v, 3) for k, v in weighted_scores.items()},
+        winner
+    )
+
+    synthesis = {"final_answer": f"Council votes: {winner}", "confidence": margin / 100}
+
+    if config.chairman in ADAPTERS and check_cli_available(config.chairman):
+        result = await ADAPTERS[config.chairman](synthesis_prompt, config.timeout)
+        if result.success:
+            synthesis = get_parsed_json(result)
+
+    duration_ms = int((time.time() - start_time) * 1000)
+
+    # Build vote result
+    vote_result = VoteResult(
+        winning_option=winner,
+        vote_counts=vote_counts,
+        weighted_scores={k: round(v, 3) for k, v in weighted_scores.items()},
+        total_votes=len(ballots),
+        quorum_met=True,
+        margin=round(margin, 1),
+        ballots=ballots,
+        tie_broken=tie_broken,
+        tie_breaker_method=tie_breaker_method
+    )
+
+    # Final output
+    emit({
+        "type": "final",
+        "mode": "vote",
+        "winner": winner,
+        "margin": round(margin, 1),
+        "answer": synthesis.get('final_answer', ''),
+        "confidence": synthesis.get('confidence', margin / 100),
+        "recommendation_strength": synthesis.get('recommendation_strength', 'moderate'),
+        "total_votes": len(ballots)
+    })
+
+    emit({
+        "type": "meta",
+        "session_id": session_id,
+        "duration_ms": duration_ms,
+        "models_voted": [b.model for b in ballots],
+        "mode": "vote"
+    })
+
+    return {
+        "session_id": session_id,
+        "mode": "vote",
+        "vote_result": asdict(vote_result),
+        "synthesis": synthesis,
+        "duration_ms": duration_ms
+    }
+
 async def run_adaptive_cascade(config: SessionConfig) -> dict:
     """
     Adaptive tiered cascade methodology - automatically escalates through modes based on convergence.
@@ -1232,12 +1591,14 @@ def main():
         context=validation['context']  # REDACTED CONTEXT
     )
 
-    # Adaptive cascade or single mode
+    # Mode dispatch
     if args.mode == 'adaptive':
         result = asyncio.run(run_adaptive_cascade(config))
+    elif args.mode == 'vote':
+        result = asyncio.run(run_vote_council(config))
     else:
         result = asyncio.run(run_council(config))
-    
+
     if config.output_level == 'audit':
         print(json.dumps(result, indent=2))
 
