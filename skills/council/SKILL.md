@@ -5,98 +5,109 @@ description: This skill should be used when the user asks to "ask the council", 
 
 # Council - Multi-Model Deliberation
 
-Orchestrate collective intelligence from Claude Opus, Gemini Pro, and Codex through parallel analysis, anonymous peer review, and synthesis.
+Orchestrate collective intelligence from Claude Opus, Gemini Pro, and Codex through **multi-round deliberation**, persona-based analysis, anonymous peer review, and synthesis.
+
+## Persona Assignments
+
+Each model assumes a specialized role to provide diverse perspectives:
+
+- **Claude (Chief Architect)**: Strategic design, architectural trade-offs, long-term maintainability
+- **Gemini (Security Officer)**: Security analysis, vulnerabilities, compliance, risk assessment
+- **Codex (Performance Engineer)**: Performance optimization, algorithms, efficiency, scalability
 
 ## Execution Workflow
 
 When user triggers council (e.g., "ask the council: Should we use TypeScript?"):
 
-**IMPORTANT**: Always use ALL 3 models (Claude, Gemini, Codex) and Claude as chairman for synthesis.
+**IMPORTANT**: Always use ALL 3 models (Claude, Gemini, Codex) with their assigned personas.
 
-**IMPORTANT**: Provide progress updates to user as each model responds.
+**IMPORTANT**: Multi-round deliberation with feedback loops - models see each other's arguments and provide rebuttals.
 
-### Stage 1: Gather Opinions (Parallel)
+**IMPORTANT**: Provide progress updates showing rounds, personas, and convergence status.
 
-**Tell user**: "Consulting the council (Claude Opus, Gemini Pro, Codex)..."
+### Invocation
 
-Execute these 3 queries in parallel using Bash tool:
+Use the Python orchestrator to manage multi-round deliberation:
 
 ```bash
-# Query Claude CLI
-claude -p "$(cat <<'EOF'
-Question: [user's question]
-
-Provide your analysis as JSON:
-{
-  "answer": "Your direct answer (max 500 words)",
-  "key_points": ["point1", "point2", "point3"],
-  "confidence": 0.85,
-  "assumptions": ["assumption1"],
-  "uncertainties": ["what you're unsure about"]
-}
-EOF
-)" --output-format json
-
-# Query Gemini CLI
-gemini "$(cat <<'EOF'
-Question: [user's question]
-
-Provide your analysis as JSON:
-{
-  "answer": "Your direct answer (max 500 words)",
-  "key_points": ["point1", "point2", "point3"],
-  "confidence": 0.85,
-  "assumptions": ["assumption1"],
-  "uncertainties": ["what you're unsure about"]
-}
-EOF
-)"
-
-# Query Codex CLI
-codex exec "$(cat <<'EOF'
-Question: [user's question]
-
-Provide your analysis as JSON:
-{
-  "answer": "Your direct answer (max 500 words)",
-  "key_points": ["point1", "point2", "point3"],
-  "confidence": 0.85,
-  "assumptions": ["assumption1"],
-  "uncertainties": ["what you're unsure about"]
-}
-EOF
-)"
+python3 skills/council/scripts/council.py \
+  --query "[user's question]" \
+  --mode consensus \
+  --max-rounds 3 \
+  --models claude,gemini,codex \
+  --chairman claude
 ```
 
-**After each model responds, tell user**:
-- "✓ Claude CLI responded (16.2s)"
-- "✓ Gemini CLI responded (12.3s)"
-- "✓ Codex CLI responded (3.1s)"
+### Multi-Round Deliberation Process
 
-### Stage 2: Peer Review (Anonymized)
+#### Round 1: Initial Positions (Parallel)
+
+**Tell user**: "Starting council deliberation with Chief Architect, Security Officer, Performance Engineer..."
+
+All 3 models provide initial analysis with their persona lens:
+- **Chief Architect (Claude)**: Architecture and design perspective
+- **Security Officer (Gemini)**: Security and risk perspective
+- **Performance Engineer (Codex)**: Performance and efficiency perspective
+
+**Progress updates**:
+- "Round 1 started (max 3 rounds)"
+- "✓ Chief Architect responded (23.1s)"
+- "✓ Security Officer responded (24.5s)"
+- "✓ Performance Engineer responded (9.0s)"
+
+#### Round 2+: Rebuttals and Refinement
+
+**Tell user**: "Round 2: Models reviewing each other's arguments..."
+
+Each model receives **anonymized summaries** of what OTHER models said:
+- See their key points, confidence levels, and reasoning
+- Provide **rebuttals** to arguments they disagree with
+- Offer **concessions** where they agree with others
+- Signal **convergence** if they've reached consensus
+
+**Progress updates**:
+- "Round 2 started"
+- "✓ Chief Architect rebuttal (31.0s)"
+- "✓ Security Officer rebuttal (32.2s)"
+- "✓ Performance Engineer rebuttal (12.0s)"
+- "Convergence check: score 0.944 (converged ✓)"
+
+#### Convergence Detection
+
+After each round (starting round 2), check convergence based on:
+1. **Explicit signals**: Models indicate they've reached agreement
+2. **High confidence**: Average confidence ≥ 0.8 across models
+3. **Low uncertainty**: Models report few remaining doubts
+
+**Convergence threshold**: 0.8 (combination of confidence and signals)
+
+**If converged**: Stop iteration early, proceed to synthesis
+**If not converged**: Continue to next round (up to max_rounds)
+
+### Peer Review (Anonymized)
 
 **Tell user**: "Conducting anonymous peer review..."
 
-Anonymize the 3 responses by shuffling and labeling them A, B, C.
-
-Score each response on:
+Chairman (Claude) scores final round responses:
 - **Accuracy** (1-5): Factual correctness
 - **Completeness** (1-5): Thoroughness of coverage
 - **Reasoning** (1-5): Logic quality
 - **Clarity** (1-5): Communication effectiveness
 
-Identify contradictions: "Response A claims X while Response B claims Y"
+Identify contradictions between perspectives.
 
-**Tell user**: "Peer review complete. Synthesizing consensus..."
+### Final Synthesis
 
-### Stage 3: Synthesis
+**Tell user**: "Chairman synthesizing all rounds..."
 
-Produce final answer that:
-1. Incorporates strongest points from all responses
-2. Resolves contradictions with evidence
-3. Notes remaining uncertainties
-4. Includes dissenting views if significant
-5. Provides confidence score based on agreement level
+Chairman (Claude) produces final answer incorporating:
+1. **All rounds of deliberation** (not just final round)
+2. Strongest arguments from each persona
+3. Contradiction resolutions with evidence
+4. Remaining uncertainties
+5. Dissenting views if significant
+6. Overall confidence score (0.0-1.0)
+7. Number of rounds completed and convergence status
 
 ## Response Format
 
@@ -105,49 +116,72 @@ Present results as:
 ```markdown
 ## Council Deliberation: [Question]
 
-**Participants**: Claude Opus, Gemini Pro, Codex
+**Participants**: Chief Architect (Claude), Security Officer (Gemini), Performance Engineer (Codex)
+**Rounds Completed**: 2 of 3 (converged at round 2)
+**Convergence Score**: 0.944 (converged ✓)
+**Session Duration**: 104.4s
 
-### Individual Opinions
+### Round 1: Initial Positions
 
-**Response A** (Confidence: 0.87)
-- [key points]
+**Chief Architect** (Confidence: 0.85)
+- [key architectural points]
 
-**Response B** (Confidence: 0.92)
-- [key points]
+**Security Officer** (Confidence: 0.90)
+- [key security points]
 
-**Response C** (Confidence: 0.78)
-- [key points]
+**Performance Engineer** (Confidence: 0.80)
+- [key performance points]
 
-### Peer Review Scores
+### Round 2: Rebuttals and Refinement
 
-| Response | Accuracy | Completeness | Reasoning | Clarity | Total |
-|----------|----------|--------------|-----------|---------|-------|
-| A        | 4        | 4            | 5         | 4       | 17/20 |
-| B        | 5        | 5            | 5         | 5       | 20/20 |
-| C        | 4        | 3            | 4         | 4       | 15/20 |
+**Chief Architect** (Confidence: 0.90)
+- Rebuttals: [counter-arguments to other perspectives]
+- Concessions: [points of agreement]
+
+**Security Officer** (Confidence: 0.95)
+- Rebuttals: [counter-arguments]
+- Concessions: [points of agreement]
+
+**Performance Engineer** (Confidence: 0.92)
+- Rebuttals: [counter-arguments]
+- Concessions: [points of agreement]
+
+**Convergence**: ✓ Achieved (score: 0.944)
+
+### Peer Review Scores (Final Round)
+
+| Persona | Accuracy | Completeness | Reasoning | Clarity | Total |
+|---------|----------|--------------|-----------|---------|-------|
+| Chief Architect        | 5        | 5            | 5         | 5       | 20/20 |
+| Security Officer       | 4        | 4            | 4         | 4       | 16/20 |
+| Performance Engineer   | 4        | 4            | 5         | 5       | 18/20 |
 
 ### Key Contradictions
 
-- **Response A** claims [X] while **Response B** claims [Y]
-  - **Resolution**: [synthesis with evidence]
+- **Chief Architect** emphasizes X while **Security Officer** prioritizes Y
+  - **Resolution**: [synthesis showing both are valid under different constraints]
 
 ### Council Consensus
 
-[Synthesized answer incorporating strongest points from all perspectives]
+[Synthesized answer incorporating all rounds and perspectives]
 
-**Confidence**: 0.85 (based on agreement level and scores)
-
-### Dissenting View
-
-[If significant disagreement remains, present minority perspective]
+**Final Confidence**: 0.91 (based on convergence and peer review)
+**Dissenting View**: [If significant disagreement remains, present minority perspective]
 ```
 
 ## Deliberation Modes
 
 ### Consensus (Default)
-- Use when: Factual questions, technical validation
-- Process: Single round, all models answer simultaneously
-- Quorum: Minimum 2 valid responses required
+- **Use when**: Factual questions, technical validation, design decisions
+- **Process**: Multi-round deliberation with convergence detection
+  1. Round 1: All 3 personas provide initial analysis
+  2. Round 2+: Models see others' arguments, provide rebuttals/concessions
+  3. Convergence check after each round (threshold: 0.8)
+  4. Early termination if converged, or continue to max_rounds (default: 3)
+  5. Peer review and synthesis by chairman
+- **Quorum**: Minimum 2 valid responses required per round
+- **Convergence signals**: High confidence (≥0.8) + explicit agreement signals
+- **Max rounds**: 3 (configurable with --max-rounds)
 
 ### Debate
 - Use when: Controversial topics, multiple valid approaches
@@ -209,11 +243,26 @@ Always before querying:
 User: "Ask the council: What's the best database for real-time chat?"
 
 Execute:
-1. Query Gemini, Codex in parallel via Bash
-2. Provide Claude analysis
-3. Anonymize as A, B, C
-4. Score each on accuracy, completeness, reasoning, clarity
-5. Synthesize: "Consensus recommends Redis for pub/sub + PostgreSQL for persistence..."
+```bash
+python3 skills/council/scripts/council.py \
+  --query "What's the best database for real-time chat?" \
+  --mode consensus \
+  --max-rounds 3
+```
+
+**Progress shown to user**:
+1. "Starting council deliberation with Chief Architect, Security Officer, Performance Engineer..."
+2. "Round 1 started (max 3 rounds)"
+3. "✓ Chief Architect responded (16.2s)" - Analyzes architecture trade-offs
+4. "✓ Security Officer responded (12.3s)" - Evaluates security implications
+5. "✓ Performance Engineer responded (3.1s)" - Assesses performance characteristics
+6. "Round 2 started"
+7. "✓ Chief Architect rebuttal (20.1s)" - Responds to performance concerns
+8. "✓ Security Officer rebuttal (18.5s)" - Addresses architecture suggestions
+9. "✓ Performance Engineer rebuttal (5.2s)" - Validates security requirements
+10. "Convergence check: score 0.91 (converged ✓)"
+11. "Chairman synthesizing all rounds..."
+12. **Final synthesis**: "Consensus recommends Redis for pub/sub + PostgreSQL for persistence..."
 
 ### Example 2: Debate Mode
 
