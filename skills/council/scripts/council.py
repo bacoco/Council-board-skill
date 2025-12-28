@@ -19,9 +19,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional, List, Tuple
 
-# Import PersonaManager
+# Import PersonaManager and Security
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from persona_manager import PersonaManager, Persona
+from security.input_validator import InputValidator, validate_and_sanitize
 
 # ============================================================================
 # Constants
@@ -49,6 +50,9 @@ def emit_perf_metric(func_name: str, elapsed_ms: float, **kwargs):
 
 # Global PersonaManager instance (used as fallback when LLM generation fails)
 PERSONA_MANAGER = PersonaManager()
+
+# Global InputValidator instance for security
+INPUT_VALIDATOR = InputValidator()
 
 # ============================================================================
 # Data Classes
@@ -551,8 +555,11 @@ def check_convergence(round_responses: list[dict], threshold: float = CONVERGENC
 # ============================================================================
 
 def emit(event: dict):
+    """Emit event with automatic secret redaction."""
     event['ts'] = int(time.time())
-    print(json.dumps(event), flush=True)
+    # Redact secrets from output before emission
+    redacted_event = INPUT_VALIDATOR.redact_output(event)
+    print(json.dumps(redacted_event), flush=True)
 
 def anonymize_responses(responses: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
     labels = ['A', 'B', 'C', 'D', 'E']
@@ -1167,21 +1174,50 @@ def main():
 
     args = parser.parse_args()
 
+    # ============================================================================
+    # SECURITY: Input Validation and Sanitization
+    # ============================================================================
+
+    validation = validate_and_sanitize(
+        query=args.query,
+        context=args.context,
+        max_rounds=args.max_rounds,
+        timeout=args.timeout,
+        strict=False  # Sanitize and continue (strict=True would fail on violations)
+    )
+
+    # Emit validation warnings if any violations found
+    if validation['violations']:
+        emit({
+            'type': 'validation_warnings',
+            'violations': validation['violations'],
+            'redacted_secrets': validation['redacted_secrets']
+        })
+
+    # Fail if query is invalid
+    if not validation['is_valid']:
+        emit({
+            'type': 'error',
+            'msg': 'Input validation failed - request rejected',
+            'violations': validation['violations']
+        })
+        sys.exit(1)
+
     # Apply fallback for unavailable models
     requested_models = args.models.split(',')
     expanded_models = expand_models_with_fallback(requested_models, min_models=3)
 
     config = SessionConfig(
-        query=args.query,
+        query=validation['query'],  # SANITIZED QUERY
         mode=args.mode,
         models=expanded_models,
         chairman=args.chairman,
-        timeout=args.timeout,
+        timeout=validation['timeout'],  # VALIDATED TIMEOUT
         anonymize=args.anonymize,
         council_budget=args.budget,
         output_level=args.output,
-        max_rounds=args.max_rounds,
-        context=args.context
+        max_rounds=validation['max_rounds'],  # VALIDATED MAX_ROUNDS
+        context=validation['context']  # REDACTED CONTEXT
     )
 
     # Adaptive cascade or single mode

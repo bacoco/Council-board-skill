@@ -270,14 +270,58 @@ python3 skills/council/scripts/council.py \
 ```
 - **Expected outcome**: Thorough critique with identified weaknesses, proposed mitigations, and recommendation on whether to proceed (often conditional approval with requirements)
 
-## Error Handling
+## Security Features
 
-**Note**: This is a personal development skill designed for single-user use with trusted input. Security features like secret redaction and injection detection are not included as they're unnecessary for personal CLI usage.
+**NEW**: Phase 1 security hardening implemented with defense-in-depth protection:
+
+### Input Validation & Sanitization
+
+All user inputs are automatically validated and sanitized before processing:
+
+1. **Shell Injection Prevention (CWE-78)**
+   - Detects shell operators: `;`, `&`, `|`, backticks, `$()`, redirection
+   - Validates against path traversal attacks (`../..`)
+   - Prevents command injection and RCE
+
+2. **Prompt Injection Detection (OWASP LLM01)**
+   - Detects instruction override attempts
+   - Blocks privilege escalation patterns
+   - Prevents system tag injection
+   - Stops role redefinition attacks
+
+3. **Secret Redaction (OWASP LLM06)**
+   - Automatically redacts API keys (OpenAI, Google, GitHub, AWS)
+   - Redacts OAuth tokens, JWT tokens, passwords
+   - Applied to both input context AND output
+   - Prevents accidental secret leakage to LLM providers
+
+4. **DoS Protection**
+   - Query length limit: 50,000 characters
+   - Context length limit: 200,000 characters
+   - max_rounds bounded: 1-10 rounds
+   - timeout bounded: 10-300 seconds
+
+### Validation Modes
+
+- **Strict mode**: Reject requests with any violations
+- **Sanitize mode** (default): Redact secrets, warn on violations, continue processing
+
+### Testing
+
+Run security test suite:
+```bash
+python3 tests/test_security.py
+```
+
+Tests verify protection against 22+ attack vectors across 6 categories.
+
+## Error Handling
 
 - **CLI timeout** (>60s): Mark as ABSTENTION, continue with available responses
 - **Quorum failure** (<2 responses): Inform user, suggest retry with just Claude analysis
 - **Invalid JSON**: Extract key points from raw text, score lower
 - **Contradictions unresolvable**: Present both views clearly, let user decide
+- **Validation failures**: Emit warnings, reject if critical (shell injection)
 
 ## Examples
 
