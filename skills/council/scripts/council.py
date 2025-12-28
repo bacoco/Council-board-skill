@@ -6,13 +6,14 @@ CLI entry point for council deliberations.
 
 import argparse
 import asyncio
+import functools
 import json
 import random
 import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from typing import Literal, Optional, List, Tuple
 
@@ -29,6 +30,9 @@ CONVERGENCE_THRESHOLD = 0.8          # Threshold for declaring convergence
 MIN_QUORUM = 2  # Minimum valid responses required per round
 DEFAULT_TIMEOUT = 60  # Default timeout in seconds for CLI calls
 
+# Pre-compiled regex patterns (performance optimization)
+JSON_PATTERN = re.compile(r'\{[\s\S]*\}')  # Extract JSON from text
+
 # ============================================================================
 # Data Classes
 # ============================================================================
@@ -41,6 +45,7 @@ class LLMResponse:
     latency_ms: int
     success: bool
     error: Optional[str] = None
+    parsed_json: Optional[dict] = field(default=None, repr=False)  # Cached JSON parsing
 
 @dataclass
 class SessionConfig:
@@ -147,8 +152,9 @@ class CLIConfig:
     args: List[str]
     use_stdin: bool = False
 
+@functools.lru_cache(maxsize=32)
 def check_cli_available(cli: str) -> bool:
-    """Check if a CLI tool is available in PATH."""
+    """Check if a CLI tool is available in PATH. Results are cached."""
     try:
         result = subprocess.run(['which', cli], capture_output=True, timeout=5)
         return result.returncode == 0
@@ -611,21 +617,31 @@ def anonymize_responses(responses: dict[str, str]) -> tuple[dict[str, str], dict
     return anonymized, mapping
 
 def extract_json(text: str) -> dict:
-    """Extract JSON from text response, with fallback to raw text."""
+    """Extract JSON from text response, with fallback to raw text. Uses pre-compiled regex."""
     text = text.strip()
     if text.startswith('{'):
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
-    # Look for JSON block
-    match = re.search(r'\{[\s\S]*\}', text)
+    # Look for JSON block using pre-compiled pattern
+    match = JSON_PATTERN.search(text)
     if match:
         try:
             return json.loads(match.group())
         except json.JSONDecodeError:
             pass
     return {"raw": text}
+
+def get_parsed_json(response: LLMResponse) -> dict:
+    """
+    Get parsed JSON from LLMResponse, using cached value if available.
+
+    This avoids re-parsing the same JSON multiple times (performance optimization).
+    """
+    if response.parsed_json is None:
+        response.parsed_json = extract_json(response.content)
+    return response.parsed_json
 
 def get_base_model(model_instance: str) -> str:
     """
@@ -719,7 +735,7 @@ async def peer_review(config: SessionConfig, opinions: dict[str, str]) -> dict:
     if config.chairman in ADAPTERS and check_cli_available(config.chairman):
         result = await ADAPTERS[config.chairman](prompt, config.timeout)
         if result.success:
-            review = extract_json(result.content)
+            review = get_parsed_json(result)  # Use cached JSON parsing
             # Emit scores
             for resp_id, scores in review.get('scores', {}).items():
                 emit({"type": "score", "reviewer": config.chairman, "target": resp_id, "scores": scores})
@@ -744,7 +760,7 @@ async def synthesize(config: SessionConfig, opinions: dict, review: dict, confli
     if config.chairman in ADAPTERS and check_cli_available(config.chairman):
         result = await ADAPTERS[config.chairman](prompt, config.timeout)
         if result.success:
-            synthesis = extract_json(result.content)
+            synthesis = get_parsed_json(result)  # Use cached JSON parsing
             return synthesis
 
     return {"final_answer": "Synthesis failed", "confidence": 0.0}
@@ -813,7 +829,7 @@ Produce final meta-synthesis as JSON:
     if chairman in ADAPTERS and check_cli_available(chairman):
         result = await ADAPTERS[chairman](prompt, timeout)
         if result.success:
-            return extract_json(result.content)
+            return get_parsed_json(result)  # Use cached JSON parsing
 
     return {"final_answer": "Meta-synthesis failed", "confidence": 0.0}
 
