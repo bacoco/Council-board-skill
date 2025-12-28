@@ -145,11 +145,15 @@ async def query_codex(prompt: str, timeout: int) -> LLMResponse:
     start = time.time()
     try:
         proc = await asyncio.create_subprocess_exec(
-            'codex', prompt,
+            'codex', 'exec',
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=prompt.encode()),
+            timeout=timeout
+        )
         latency = int((time.time() - start) * 1000)
         
         if proc.returncode == 0:
