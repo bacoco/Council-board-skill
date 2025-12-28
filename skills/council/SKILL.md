@@ -19,10 +19,25 @@ When user triggers council (e.g., "ask the council: Should we use TypeScript?"):
 
 **Tell user**: "Consulting the council (Claude Opus, Gemini Pro, Codex)..."
 
-Execute these queries in parallel using Bash tool:
+Execute these 3 queries in parallel using Bash tool:
 
 ```bash
-# Query Gemini
+# Query Claude CLI
+claude -p "$(cat <<'EOF'
+Question: [user's question]
+
+Provide your analysis as JSON:
+{
+  "answer": "Your direct answer (max 500 words)",
+  "key_points": ["point1", "point2", "point3"],
+  "confidence": 0.85,
+  "assumptions": ["assumption1"],
+  "uncertainties": ["what you're unsure about"]
+}
+EOF
+)" --output-format json
+
+# Query Gemini CLI
 gemini "$(cat <<'EOF'
 Question: [user's question]
 
@@ -37,7 +52,7 @@ Provide your analysis as JSON:
 EOF
 )"
 
-# Query Codex
+# Query Codex CLI
 codex exec "$(cat <<'EOF'
 Question: [user's question]
 
@@ -53,12 +68,10 @@ EOF
 )"
 ```
 
-Also provide your own Claude Opus analysis in the same JSON format.
-
 **After each model responds, tell user**:
-- "✓ Gemini Pro responded (12.3s)"
-- "✓ Codex responded (3.1s)"
-- "✓ Claude Opus analysis complete"
+- "✓ Claude CLI responded (16.2s)"
+- "✓ Gemini CLI responded (12.3s)"
+- "✓ Codex CLI responded (3.1s)"
 
 ### Stage 2: Peer Review (Anonymized)
 

@@ -27,11 +27,12 @@ Get multiple opinions: Best database for real-time chat app
 ```
 
 Claude will automatically:
-1. ✓ Query Gemini Pro
-2. ✓ Query Codex
-3. ✓ Provide Claude Opus analysis
-4. ✓ Conduct anonymous peer review
-5. ✓ Synthesize consensus with confidence score
+1. ✓ Query Claude CLI for opinion
+2. ✓ Query Gemini CLI for opinion
+3. ✓ Query Codex CLI for opinion
+4. ✓ Anonymize responses (shuffle as A, B, C)
+5. ✓ Conduct peer review (Claude as chairman scores all 3)
+6. ✓ Synthesize consensus with confidence score
 
 ## Deliberation Modes
 
