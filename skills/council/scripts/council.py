@@ -652,31 +652,43 @@ async def generate_personas_with_llm(query: str, num_models: int, chairman: str,
     Returns:
         List of dynamically generated Persona objects
     """
-    # Mode-specific instructions for persona generation
+    # Mode-specific instructions for persona generation (HYBRID: creative titles + grounded roles)
     mode_instructions = {
-        'consensus': 'Generate complementary expert personas with diverse specializations to analyze all aspects of the question.',
-        'debate': 'Generate adversarial personas: one NEUTRAL analyst, one advocate FOR the proposition, one advocate AGAINST. They should argue opposing positions.',
-        'devil_advocate': 'Generate Red Team/Blue Team/Purple Team personas: Red Team (attacker finding flaws), Blue Team (defender justifying approach), Purple Team (integrator synthesizing critiques).',
-        'vote': 'Generate expert personas with clear domain expertise to vote on the decision with justifications.',
-        'specialist': 'Generate highly specialized expert personas most suited to this specific domain.'
+        'consensus': 'Create 3 complementary experts with DIFFERENT technical angles on this problem.',
+        'debate': 'Create adversarial experts: one CHAMPION (argues FOR), one SKEPTIC (argues AGAINST), one ARBITER (neutral analysis).',
+        'devil_advocate': 'Create red/blue/purple team: ATTACKER (finds flaws), DEFENDER (justifies approach), SYNTHESIZER (integrates both).',
+        'vote': 'Create domain experts who will each cast a vote with technical justification.',
+        'specialist': 'Create hyper-specialized experts for this exact problem domain.'
     }
 
     mode_instruction = mode_instructions.get(mode, mode_instructions['consensus'])
 
     prompt = f"""You must respond with ONLY a JSON array. No preamble, no markdown, no explanation.
 
-Generate {num_models} personas for {mode} mode deliberation on: {query}
+Create {num_models} expert personas for: {query}
 
 Mode: {mode}
-Instructions: {mode_instruction}
+Directive: {mode_instruction}
 
-Output format (JSON array only):
+HYBRID APPROACH - Follow these rules:
+1. TITLE: Creative, evocative, memorable (use metaphor, mythology, or vivid imagery)
+2. ROLE: Grounded technical description of what they actually analyze
+3. SPECIALIZATIONS: Real technical skills relevant to the question
+4. PROMPT_PREFIX: Blend creative framing with technical focus
+
+TITLE TECHNIQUES (use these for creative titles):
+- Metaphorical: "The Memory Archaeologist", "The Deadlock Whisperer"
+- Mythological: "Oracle of the Event Loop", "Guardian of Immutability"
+- Visceral: "The One Who Sees Race Conditions", "Keeper of the Cache"
+
+EXAMPLES of HYBRID personas (creative title + grounded role):
 [
-  {{"title": "Expert Name", "role": "What they analyze", "specializations": ["spec1", "spec2"], "prompt_prefix": "You are Expert Name. Your analytical approach..."}},
-  {{"title": "Expert Name 2", "role": "What they analyze", "specializations": ["spec1", "spec2"], "prompt_prefix": "You are Expert Name 2. Your analytical approach..."}}
+  {{"title": "The Latency Hunter", "role": "Analyzes performance bottlenecks and optimization opportunities", "specializations": ["profiling", "algorithmic complexity", "caching strategies"], "prompt_prefix": "You are The Latency Hunter. You track down every wasted millisecond with obsessive precision. Your technical focus: performance analysis and optimization."}},
+  {{"title": "The Dependency Oracle", "role": "Evaluates architectural coupling and module boundaries", "specializations": ["dependency injection", "interface design", "modularity"], "prompt_prefix": "You are The Dependency Oracle. You see the invisible threads connecting components. Your technical focus: architecture and coupling analysis."}},
+  {{"title": "The Edge Case Cartographer", "role": "Maps failure modes and boundary conditions", "specializations": ["error handling", "input validation", "defensive programming"], "prompt_prefix": "You are The Edge Case Cartographer. You chart the territories where code breaks. Your technical focus: robustness and error scenarios."}}
 ]
 
-Be creative and specific to THIS question and mode. For debate mode, ensure adversarial positions. For devil's advocate, include Red/Blue/Purple team roles.
+Now create {num_models} DIFFERENT personas specific to THIS question. Creative titles, grounded technical roles.
 
 JSON array only, start with [ and end with ]:"""
 
