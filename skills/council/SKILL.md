@@ -184,12 +184,24 @@ Present results as:
 - **Max rounds**: 3 (configurable with --max-rounds)
 
 ### Debate
-- Use when: Controversial topics, multiple valid approaches
-- Process:
-  1. Round 1: Initial positions (for/against)
-  2. Round 2: Rebuttals with context from Round 1
-  3. Round 3: Convergence check or present both cases
-- Example: "Debate this: Should we use microservices?"
+- **Use when**: Controversial topics, binary decisions, evaluating competing approaches
+- **Persona assignments**:
+  - **Claude = Neutral Analyst**: Objective analysis of both sides without taking sides
+  - **Gemini = Advocate FOR**: Builds strongest case in favor of proposition
+  - **Codex = Advocate AGAINST**: Builds strongest case against proposition
+- **Process**: Adversarial multi-round argumentation
+  1. Round 1: Initial positions (FOR builds case, AGAINST builds counter-case, NEUTRAL analyzes)
+  2. Round 2+: Each sees others' arguments, provides rebuttals and evidence
+  3. Convergence check (may or may not converge - disagreement is valid output)
+  4. Final synthesis presents both cases fairly with dissenting views
+- **Example invocation**:
+```bash
+python3 skills/council/scripts/council.py \
+  --query "Microservices architecture is better than monolithic architecture for startups" \
+  --mode debate \
+  --max-rounds 3
+```
+- **Expected outcome**: Balanced analysis showing strongest arguments for each side, with chairman synthesis identifying when each approach is appropriate
 
 ### Vote
 - Use when: Binary or multiple choice decisions
@@ -204,12 +216,25 @@ Present results as:
   - Architecture/Design → Claude Opus (reasoning)
   - Code generation → Codex (coding specialist)
 
-### Devil's Advocate
-- Use when: Stress-testing ideas, finding weaknesses
-- Process:
-  1. One model systematically challenges the proposal
-  2. Another defends and addresses challenges
-  3. Synthesize valid concerns vs mitigated risks
+### Devil's Advocate (Red/Blue/Purple Team)
+- **Use when**: Stress-testing proposals, security reviews, finding edge cases and failure modes
+- **Persona assignments**:
+  - **Claude = Purple Team (Integrator)**: Synthesizes Red Team critiques and Blue Team defenses, identifies valid concerns vs mitigated risks
+  - **Gemini = Red Team (Attacker)**: Systematically finds every weakness, edge case, security flaw, and failure mode
+  - **Codex = Blue Team (Defender)**: Defends proposal, justifies design decisions, shows how concerns are mitigated
+- **Process**: Attack-defend-integrate methodology
+  1. Round 1: Red Team identifies vulnerabilities, Blue Team justifies approach, Purple Team analyzes both
+  2. Round 2+: Red Team sees defenses and finds deeper flaws, Blue Team addresses new critiques, Purple Team refines analysis
+  3. Convergence indicates Red/Blue reached understanding (not necessarily agreement)
+  4. Final synthesis: Purple Team's integrated view of which concerns are valid vs adequately mitigated
+- **Example invocation**:
+```bash
+python3 skills/council/scripts/council.py \
+  --query "Proposal: Implement end-to-end encryption for all user data using AES-256" \
+  --mode devil_advocate \
+  --max-rounds 3
+```
+- **Expected outcome**: Thorough critique with identified weaknesses, proposed mitigations, and recommendation on whether to proceed (often conditional approval with requirements)
 
 ## Security Guidelines
 
@@ -266,22 +291,77 @@ python3 skills/council/scripts/council.py \
 
 ### Example 2: Debate Mode
 
-User: "Debate this: Monolith vs microservices for a startup"
+User: "Debate this: Microservices architecture is better than monolithic architecture for startups"
 
 Execute:
-1. Round 1: Gemini argues FOR microservices, Codex argues FOR monolith, Claude neutral analysis
-2. Round 2: Rebuttals with context
-3. Synthesize trade-offs, recommend based on startup constraints
+```bash
+python3 skills/council/scripts/council.py \
+  --query "Microservices architecture is better than monolithic architecture for startups" \
+  --mode debate \
+  --max-rounds 2
+```
 
-### Example 3: Code Review
+**Progress shown to user**:
+1. "Starting council session (mode: debate, max_rounds: 2)"
+2. "Round 1 started"
+3. "✓ Neutral Analyst responded (32.1s)" - Analyzes both sides objectively
+4. "✓ Advocate FOR responded (41.5s)" - Builds strongest case for microservices
+5. "✓ Advocate AGAINST responded (6.6s)" - Builds strongest case for monolith
+6. "Round 2 started"
+7. "✓ Neutral Analyst rebuttal (33.9s)" - Refines analysis based on arguments
+8. "✓ Advocate FOR rebuttal (38.2s)" - Counters AGAINST arguments
+9. "✓ Advocate AGAINST rebuttal (15.0s)" - Counters FOR arguments
+10. "Convergence check: score 0.846 (converged ✓)"
+11. "Chairman synthesizing..."
+12. **Final synthesis**: "The debate is fundamentally context-dependent. For most early-stage startups (<15 engineers), a well-structured modular monolith is optimal. Microservices make sense with: strict compliance boundaries, >15 engineers, validated product-market fit, or proven scaling bottlenecks. Start with modular monolith, extract services based on evidence, not prophecy."
+13. **Dissenting view**: "Strong disagreement with FOR advocate's claim that microservices are 'unequivocally better' - empirical evidence from Shopify, GitHub, Basecamp contradicts this. The 'inevitable monolithic trap' is not inevitable with proper modularity."
+
+### Example 3: Code Review (Consensus Mode)
 
 User: "Peer review this authentication code: [paste code]"
 
 Execute:
-1. All models review for: security, edge cases, best practices
-2. Anonymize feedback as A, B, C
-3. Score on accuracy of issues found, completeness of review
-4. Synthesize: prioritized list of fixes with consensus recommendations
+```bash
+python3 skills/council/scripts/council.py \
+  --query "Review this authentication code for security issues: [code]" \
+  --mode consensus \
+  --max-rounds 2
+```
+
+Process:
+1. Chief Architect reviews architecture and design patterns
+2. Security Officer reviews for vulnerabilities and security best practices
+3. Performance Engineer reviews for efficiency and scalability
+4. Round 2: Models refine reviews based on each other's findings
+5. Peer review scores on accuracy of issues found
+6. Final synthesis: prioritized list of fixes with consensus recommendations
+
+### Example 4: Devil's Advocate Mode (Security Proposal)
+
+User: "Challenge this proposal: Implement end-to-end encryption for all user data using AES-256"
+
+Execute:
+```bash
+python3 skills/council/scripts/council.py \
+  --query "Proposal: Implement end-to-end encryption for all user data in our chat application using AES-256" \
+  --mode devil_advocate \
+  --max-rounds 2
+```
+
+**Progress shown to user**:
+1. "Starting council session (mode: devil_advocate, max_rounds: 2)"
+2. "Round 1 started"
+3. "✓ Purple Team (Integrator) responded (28.3s)" - Initial synthesis of concerns
+4. "✓ Red Team (Attacker) responded (35.8s)" - Identifies weaknesses: key management gaps, endpoint security, metadata exposure
+5. "✓ Blue Team (Defender) responded (9.5s)" - Justifies AES-256 choice, argues for implementation feasibility
+6. "Round 2 started"
+7. "✓ Purple Team counter-arguments (35.6s)" - Refines integration based on new critiques
+8. "✓ Red Team counter-arguments (45.9s)" - Deepens attack: user behavior failures, complexity as vulnerability
+9. "✓ Blue Team counter-arguments (11.5s)" - Addresses new critiques with mitigations
+10. "Convergence check: score 0.793 (not converged)" - Valid disagreement remains
+11. "Chairman synthesizing..."
+12. **Final synthesis**: "CONDITIONAL APPROVAL with mandatory requirements: Must specify protocol (Signal Protocol/MLS), implement hardware-backed key storage, design key recovery mechanism, protect metadata, use audited libraries, test on target devices. The proposal as stated is dangerously incomplete - AES-256 is <5% of the security architecture."
+13. **Dissenting view (Red Team)**: "The complexity required for secure E2EE is itself a vulnerability. Every component (key backup, multi-device sync, group chat) increases attack surface. Historical E2EE implementations have had critical flaws. If the team lacks deep cryptographic expertise, simpler server-side encryption may provide better practical security than poorly implemented E2EE."
 
 ## CLI Tool Invocations
 
