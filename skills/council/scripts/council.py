@@ -16,7 +16,12 @@ import sys
 import time
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
+from pathlib import Path
 from typing import Literal, Optional, List, Tuple
+
+# Import PersonaManager
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from persona_manager import PersonaManager, Persona
 
 # ============================================================================
 # Constants
@@ -41,6 +46,9 @@ def emit_perf_metric(func_name: str, elapsed_ms: float, **kwargs):
     """Emit performance metric event if instrumentation enabled."""
     if ENABLE_PERF_INSTRUMENTATION:
         emit({"type": "perf_metric", "function": func_name, "elapsed_ms": elapsed_ms, **kwargs})
+
+# Global PersonaManager instance
+PERSONA_MANAGER = PersonaManager()
 
 # ============================================================================
 # Data Classes
@@ -496,13 +504,17 @@ ADAPTERS = {
 # Prompts
 # ============================================================================
 
-def build_opinion_prompt(query: str, model: str = None, round_num: int = 1, previous_context: str = None, mode: str = 'consensus', code_context: str = None, fallback_personas: dict = None) -> str:
-    # Get persona set based on mode
-    persona_set = get_persona_set(mode)
-
-    # Add persona prefix if model specified
+def build_opinion_prompt(query: str, model: str = None, round_num: int = 1, previous_context: str = None, mode: str = 'consensus', code_context: str = None, fallback_personas: dict = None, dynamic_persona: Persona = None) -> str:
+    # Add persona prefix
     persona_prefix = ""
-    if model:
+
+    if dynamic_persona:
+        # Use dynamically assigned persona (NEW!)
+        persona_prefix = f"<persona>\n{dynamic_persona.prompt_prefix}\nRole: {dynamic_persona.role}\n</persona>\n\n"
+    elif model:
+        # Fallback to old persona system if dynamic not provided
+        persona_set = get_persona_set(mode)
+
         # Check fallback personas first (for model instances like 'claude_instance_1')
         if fallback_personas and model in fallback_personas:
             persona = fallback_personas[model]
@@ -745,17 +757,30 @@ def get_base_model(model_instance: str) -> str:
 
 async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None) -> dict[str, LLMResponse]:
     """Gather opinions from all available models in parallel."""
-    persona_set = get_persona_set(config.mode)
     emit({"type": "status", "stage": 1, "msg": f"Collecting opinions (Round {round_num}, Mode: {config.mode})..."})
+
+    # Dynamically assign personas based on query type (for consensus mode only)
+    assigned_personas = None
+    if config.mode == 'consensus' and not config.fallback_personas:
+        assigned_personas = PERSONA_MANAGER.assign_personas(config.query, len(config.models))
+        emit({"type": "dynamic_personas", "query_type": PERSONA_MANAGER.analyze_query_type(config.query).value,
+              "personas": [p.title for p in assigned_personas]})
 
     tasks = []
     available_models = []
+    model_index = 0
+
     for model_instance in config.models:
         # Extract base model from instance ID (e.g., 'claude_instance_1' -> 'claude')
         base_model = get_base_model(model_instance)
 
         if base_model in ADAPTERS and check_cli_available(base_model):
             available_models.append(model_instance)
+
+            # Get dynamic persona for this model index
+            dynamic_persona = None
+            if assigned_personas and model_index < len(assigned_personas):
+                dynamic_persona = assigned_personas[model_index]
 
             # Build context from previous round (what OTHER models said)
             previous_context = None
@@ -770,18 +795,22 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
                 previous_context=previous_context,
                 mode=config.mode,
                 code_context=config.context,
-                fallback_personas=config.fallback_personas
+                fallback_personas=config.fallback_personas,
+                dynamic_persona=dynamic_persona
             )
 
             # Get persona title for logging
-            persona_title = model_instance  # Default to instance ID
-            if config.fallback_personas and model_instance in config.fallback_personas:
+            if dynamic_persona:
+                persona_title = dynamic_persona.title
+            elif config.fallback_personas and model_instance in config.fallback_personas:
                 persona_title = config.fallback_personas[model_instance].get('title', model_instance)
-            elif model_instance in persona_set:
-                persona_title = persona_set[model_instance].get('title', model_instance)
+            else:
+                persona_set = get_persona_set(config.mode)
+                persona_title = persona_set.get(model_instance, {}).get('title', model_instance)
 
             emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title})
             tasks.append(ADAPTERS[base_model](prompt, config.timeout))
+            model_index += 1
         else:
             emit({"type": "opinion_error", "model": model_instance, "error": "CLI not available", "status": "ABSTENTION"})
 
