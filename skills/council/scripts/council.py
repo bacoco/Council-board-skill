@@ -55,6 +55,7 @@ class SessionConfig:
     output_level: str
     max_rounds: int
     context: Optional[str] = None  # Code or additional context for analysis
+    fallback_personas: Optional[dict] = None  # Fallback personas for model instances
 
 # ============================================================================
 # Persona System
@@ -153,6 +154,133 @@ def check_cli_available(cli: str) -> bool:
         return result.returncode == 0
     except Exception:
         return False
+
+def get_available_models(requested_models: List[str]) -> List[str]:
+    """
+    Detect which CLI tools are available.
+
+    Args:
+        requested_models: List of model names to check
+
+    Returns:
+        List of available model names
+    """
+    available = []
+    for model in requested_models:
+        if check_cli_available(model):
+            available.append(model)
+    return available
+
+def create_original_thinking_personas(base_model: str, count: int) -> dict:
+    """
+    Create 'original thinking' personas for model instances when using fallback.
+
+    These personas emphasize unconventional thinking and diverse perspectives
+    to ensure robust deliberation even when using the same underlying model.
+
+    Args:
+        base_model: The base model name (claude, gemini, or codex)
+        count: Number of personas to create
+
+    Returns:
+        Dictionary mapping model_instance_id -> persona definition
+    """
+    original_personas = [
+        {
+            'title': 'Unconventional Strategist',
+            'specializations': ['contrarian thinking', 'challenging assumptions', 'non-obvious solutions'],
+            'role': 'Challenge conventional wisdom and propose contrarian approaches',
+            'prompt_prefix': 'You are an Unconventional Strategist. Your role is to challenge conventional wisdom, question popular assumptions, and propose contrarian approaches that others might overlook. Think creatively and divergently.'
+        },
+        {
+            'title': 'Systems Thinker',
+            'specializations': ['second-order effects', 'emergent properties', 'complex systems', 'feedback loops'],
+            'role': 'Analyze second-order effects and emergent system properties',
+            'prompt_prefix': 'You are a Systems Thinker. Focus on second-order effects, emergent properties, feedback loops, and how components interact in complex systems. Look beyond immediate consequences.'
+        },
+        {
+            'title': 'First Principles Analyst',
+            'specializations': ['fundamental truths', 'rebuilding from scratch', 'questioning everything'],
+            'role': 'Rebuild thinking from fundamental truths',
+            'prompt_prefix': 'You are a First Principles Analyst. Break down every assumption to fundamental truths and rebuild your reasoning from scratch. Question everything and derive insights from first principles.'
+        },
+        {
+            'title': 'Pragmatic Implementer',
+            'specializations': ['practical constraints', 'implementation reality', 'operational feasibility'],
+            'role': 'Focus on practical implementation and real-world constraints',
+            'prompt_prefix': 'You are a Pragmatic Implementer. Focus on what actually works in practice, consider implementation constraints, and prioritize operational feasibility over theoretical perfection.'
+        },
+        {
+            'title': 'Innovation Catalyst',
+            'specializations': ['paradigm shifts', 'breakthrough thinking', 'novel approaches'],
+            'role': 'Seek paradigm shifts and breakthrough innovations',
+            'prompt_prefix': 'You are an Innovation Catalyst. Look for paradigm shifts, breakthrough innovations, and entirely novel approaches. Don\'t accept "best practices" - invent better practices.'
+        }
+    ]
+
+    # Create persona instances
+    personas = {}
+    for i in range(count):
+        instance_id = f"{base_model}_instance_{i+1}"
+        persona = original_personas[i % len(original_personas)].copy()
+        personas[instance_id] = persona
+
+    return personas
+
+def expand_models_with_fallback(requested_models: List[str], min_models: int = 3) -> Tuple[List[str], dict]:
+    """
+    Expand model list with fallback if some models are unavailable.
+
+    If fewer than min_models are available, duplicates available models
+    with different 'original thinking' personas to ensure diverse perspectives.
+
+    Args:
+        requested_models: List of requested model names
+        min_models: Minimum number of model instances required (default: 3)
+
+    Returns:
+        Tuple of (expanded_model_list, fallback_personas_dict)
+        - expanded_model_list: List of model instance IDs to use
+        - fallback_personas_dict: Mapping of instance_id -> persona (empty if no fallback)
+    """
+    available = get_available_models(requested_models)
+
+    if len(available) >= min_models:
+        # All good - use available models as-is
+        return available, {}
+
+    if len(available) == 0:
+        raise RuntimeError("No model CLIs are available. Please install and authenticate at least one of: claude, gemini, codex")
+
+    # Fallback: duplicate available models to reach min_models
+    emit({
+        'type': 'fallback_triggered',
+        'requested': requested_models,
+        'available': available,
+        'min_required': min_models,
+        'msg': f'Only {len(available)} model(s) available - using fallback with original thinking personas'
+    })
+
+    expanded_models = []
+    fallback_personas = {}
+
+    # Calculate how many instances we need per available model
+    instances_needed = min_models
+    instances_per_model = (instances_needed + len(available) - 1) // len(available)  # Ceiling division
+
+    for model in available:
+        personas = create_original_thinking_personas(model, instances_per_model)
+        for instance_id, persona in personas.items():
+            expanded_models.append(instance_id)
+            fallback_personas[instance_id] = persona
+
+            if len(expanded_models) >= min_models:
+                break
+
+        if len(expanded_models) >= min_models:
+            break
+
+    return expanded_models[:min_models], fallback_personas
 
 async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout: int) -> LLMResponse:
     """
@@ -281,15 +409,21 @@ ADAPTERS = {
 # Prompts
 # ============================================================================
 
-def build_opinion_prompt(query: str, model: str = None, round_num: int = 1, previous_context: str = None, mode: str = 'consensus', code_context: str = None) -> str:
+def build_opinion_prompt(query: str, model: str = None, round_num: int = 1, previous_context: str = None, mode: str = 'consensus', code_context: str = None, fallback_personas: dict = None) -> str:
     # Get persona set based on mode
     persona_set = get_persona_set(mode)
 
     # Add persona prefix if model specified
     persona_prefix = ""
-    if model and model in persona_set:
-        persona = persona_set[model]
-        persona_prefix = f"<persona>\n{persona['prompt_prefix']}\nRole: {persona['role']}\n</persona>\n\n"
+    if model:
+        # Check fallback personas first (for model instances like 'claude_instance_1')
+        if fallback_personas and model in fallback_personas:
+            persona = fallback_personas[model]
+            persona_prefix = f"<persona>\n{persona['prompt_prefix']}\nRole: {persona['role']}\n</persona>\n\n"
+        # Then check standard personas (for base models like 'claude')
+        elif model in persona_set:
+            persona = persona_set[model]
+            persona_prefix = f"<persona>\n{persona['prompt_prefix']}\nRole: {persona['role']}\n</persona>\n\n"
 
     # Add code/implementation context if provided
     code_context_block = ""
@@ -493,6 +627,25 @@ def extract_json(text: str) -> dict:
             pass
     return {"raw": text}
 
+def get_base_model(model_instance: str) -> str:
+    """
+    Extract base model name from instance ID.
+
+    Examples:
+        'claude' -> 'claude'
+        'claude_instance_1' -> 'claude'
+        'gemini_instance_2' -> 'gemini'
+
+    Args:
+        model_instance: Model instance ID (base model or instance like 'claude_instance_1')
+
+    Returns:
+        Base model name (claude, gemini, or codex)
+    """
+    if '_instance_' in model_instance:
+        return model_instance.split('_instance_')[0]
+    return model_instance
+
 async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None) -> dict[str, LLMResponse]:
     """Gather opinions from all available models in parallel."""
     persona_set = get_persona_set(config.mode)
@@ -500,43 +653,54 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
 
     tasks = []
     available_models = []
-    for model in config.models:
-        if model in ADAPTERS and check_cli_available(model):
-            available_models.append(model)
+    for model_instance in config.models:
+        # Extract base model from instance ID (e.g., 'claude_instance_1' -> 'claude')
+        base_model = get_base_model(model_instance)
+
+        if base_model in ADAPTERS and check_cli_available(base_model):
+            available_models.append(model_instance)
 
             # Build context from previous round (what OTHER models said)
             previous_context = None
             if round_num > 1 and previous_round_opinions:
-                previous_context = build_context_from_previous_rounds(model, previous_round_opinions, config.anonymize, config.mode)
+                previous_context = build_context_from_previous_rounds(model_instance, previous_round_opinions, config.anonymize, config.mode)
 
             # Build prompt with persona, previous context, and code context
             prompt = build_opinion_prompt(
                 config.query,
-                model=model,
+                model=model_instance,
                 round_num=round_num,
                 previous_context=previous_context,
                 mode=config.mode,
-                code_context=config.context
+                code_context=config.context,
+                fallback_personas=config.fallback_personas
             )
 
-            emit({"type": "opinion_start", "model": model, "round": round_num, "persona": persona_set.get(model, {}).get('title', model)})
-            tasks.append(ADAPTERS[model](prompt, config.timeout))
+            # Get persona title for logging
+            persona_title = model_instance  # Default to instance ID
+            if config.fallback_personas and model_instance in config.fallback_personas:
+                persona_title = config.fallback_personas[model_instance].get('title', model_instance)
+            elif model_instance in persona_set:
+                persona_title = persona_set[model_instance].get('title', model_instance)
+
+            emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title})
+            tasks.append(ADAPTERS[base_model](prompt, config.timeout))
         else:
-            emit({"type": "opinion_error", "model": model, "error": "CLI not available", "status": "ABSTENTION"})
+            emit({"type": "opinion_error", "model": model_instance, "error": "CLI not available", "status": "ABSTENTION"})
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     responses = {}
-    for model, result in zip(available_models, results):
+    for model_instance, result in zip(available_models, results):
         if isinstance(result, Exception):
-            emit({"type": "opinion_error", "model": model, "error": str(result), "status": "ABSTENTION"})
-            responses[model] = LLMResponse(content='', model=model, latency_ms=0, success=False, error=str(result))
+            emit({"type": "opinion_error", "model": model_instance, "error": str(result), "status": "ABSTENTION"})
+            responses[model_instance] = LLMResponse(content='', model=model_instance, latency_ms=0, success=False, error=str(result))
         else:
             if result.success:
-                emit({"type": "opinion_complete", "model": model, "round": round_num, "latency_ms": result.latency_ms})
+                emit({"type": "opinion_complete", "model": model_instance, "round": round_num, "latency_ms": result.latency_ms})
             else:
-                emit({"type": "opinion_error", "model": model, "error": result.error, "status": "ABSTENTION"})
-            responses[model] = result
+                emit({"type": "opinion_error", "model": model_instance, "error": result.error, "status": "ABSTENTION"})
+            responses[model_instance] = result
 
     return responses
 
@@ -778,7 +942,8 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
         council_budget=config.council_budget,
         output_level=config.output_level,
         max_rounds=config.max_rounds,
-        context=config.context
+        context=config.context,
+        fallback_personas=config.fallback_personas
     )
 
     consensus_result = await run_council(consensus_config)
@@ -815,7 +980,8 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
         council_budget=config.council_budget,
         output_level=config.output_level,
         max_rounds=config.max_rounds,
-        context=config.context
+        context=config.context,
+        fallback_personas=config.fallback_personas
     )
 
     debate_result = await run_council(debate_config)
@@ -871,7 +1037,8 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
         council_budget=config.council_budget,
         output_level=config.output_level,
         max_rounds=config.max_rounds,
-        context=config.context
+        context=config.context,
+        fallback_personas=config.fallback_personas
     )
 
     devils_result = await run_council(devils_config)
@@ -925,17 +1092,22 @@ def main():
 
     args = parser.parse_args()
 
+    # Apply fallback for unavailable models
+    requested_models = args.models.split(',')
+    expanded_models, fallback_personas = expand_models_with_fallback(requested_models, min_models=3)
+
     config = SessionConfig(
         query=args.query,
         mode=args.mode,
-        models=args.models.split(','),
+        models=expanded_models,
         chairman=args.chairman,
         timeout=args.timeout,
         anonymize=args.anonymize,
         council_budget=args.budget,
         output_level=args.output,
         max_rounds=args.max_rounds,
-        context=args.context
+        context=args.context,
+        fallback_personas=fallback_personas if fallback_personas else None
     )
 
     # Adaptive cascade or single mode
