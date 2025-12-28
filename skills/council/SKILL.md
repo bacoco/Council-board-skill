@@ -1,6 +1,15 @@
 ---
 name: Council
 description: This skill should be used when the user asks to "ask the council", "debate this", "vote on", "get multiple opinions", "what do other AIs think", "peer review", "challenge my design", or requests collective AI intelligence from multiple models (Claude Opus, Gemini Pro, GPT/Codex).
+allowed-tools:
+  - "Bash(python3 ${SKILL_ROOT}/scripts/council.py:*)"
+  - "Read(**/*.py)"
+  - "Read(**/*.ts)"
+  - "Read(**/*.js)"
+  - "Read(**/*.tsx)"
+  - "Read(**/*.go)"
+  - "Read(**/*.rs)"
+  - "Read(**/*.java)"
 ---
 
 # Council - Multi-Model Deliberation
@@ -27,15 +36,40 @@ When user triggers council (e.g., "ask the council: Should we use TypeScript?"):
 
 ### Invocation
 
-Use the Python orchestrator to manage multi-round deliberation:
+**IMPORTANT**: If user's question references code, files, or specific implementations:
+1. Use Read tool to get the code/files FIRST
+2. Pass code as --context argument to provide full context to all models
 
+**Basic invocation** (no code context):
 ```bash
-python3 skills/council/scripts/council.py \
+python3 ${SKILL_ROOT}/scripts/council.py \
   --query "[user's question]" \
   --mode consensus \
-  --max-rounds 3 \
-  --models claude,gemini,codex \
-  --chairman claude
+  --max-rounds 3
+```
+
+**With code context** (when user references code):
+```bash
+# First read the relevant code
+Read file_path
+
+# Then invoke council with context
+python3 ${SKILL_ROOT}/scripts/council.py \
+  --query "[user's question]" \
+  --context "[code content from Read tool]" \
+  --mode consensus \
+  --max-rounds 3
+```
+
+**Example - Code review**:
+```
+User: "Ask the council: Is this authentication function secure?"
+      [shows code snippet or references a file]
+
+You should:
+1. Read the file if referenced, OR use the code snippet from conversation
+2. Call council with --context containing the code
+3. Models will analyze the code from all 3 perspectives
 ```
 
 ### Multi-Round Deliberation Process
