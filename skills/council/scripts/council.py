@@ -47,11 +47,8 @@ def emit_perf_metric(func_name: str, elapsed_ms: float, **kwargs):
     if ENABLE_PERF_INSTRUMENTATION:
         emit({"type": "perf_metric", "function": func_name, "elapsed_ms": elapsed_ms, **kwargs})
 
-# Global PersonaManager instance
+# Global PersonaManager instance (used as fallback when LLM generation fails)
 PERSONA_MANAGER = PersonaManager()
-
-# LLM-generated personas toggle
-USE_LLM_GENERATED_PERSONAS = True  # Set to False to use PersonaManager library
 
 # ============================================================================
 # Data Classes
@@ -80,86 +77,13 @@ class SessionConfig:
     output_level: str
     max_rounds: int
     context: Optional[str] = None  # Code or additional context for analysis
-    fallback_personas: Optional[dict] = None  # Fallback personas for model instances
 
 # ============================================================================
 # Persona System
 # ============================================================================
 
-# Consensus mode personas
-PERSONAS = {
-    'claude': {
-        'title': 'Chief Architect',
-        'specializations': ['architecture', 'design', 'trade-offs', 'long-term vision', 'maintainability'],
-        'role': 'Strategic design and architectural decisions',
-        'prompt_prefix': 'You are the Chief Architect. Focus on strategic design, architectural trade-offs, and long-term maintainability.'
-    },
-    'gemini': {
-        'title': 'Security Officer',
-        'specializations': ['security', 'vulnerabilities', 'compliance', 'risk assessment', 'threat modeling'],
-        'role': 'Security analysis and risk mitigation',
-        'prompt_prefix': 'You are the Security Officer. Prioritize security concerns, identify vulnerabilities, assess risks, and ensure compliance with best practices.'
-    },
-    'codex': {
-        'title': 'Performance Engineer',
-        'specializations': ['performance', 'algorithms', 'optimization', 'efficiency', 'scalability'],
-        'role': 'Performance optimization and algorithmic efficiency',
-        'prompt_prefix': 'You are the Performance Engineer. Focus on speed, efficiency, algorithmic complexity, and scalability.'
-    }
-}
-
-# Debate mode personas (adversarial)
-DEBATE_PERSONAS = {
-    'claude': {
-        'title': 'Neutral Analyst',
-        'position': 'neutral',
-        'role': 'Objective analysis of both sides',
-        'prompt_prefix': 'You are a Neutral Analyst. Provide objective analysis of arguments from both sides. Identify strengths and weaknesses in each position without taking sides.'
-    },
-    'gemini': {
-        'title': 'Advocate FOR',
-        'position': 'for',
-        'role': 'Argue in favor of the proposition',
-        'prompt_prefix': 'You are the Advocate FOR the proposition. Build the strongest possible case in favor. Find evidence, precedents, and logical arguments that support this position.'
-    },
-    'codex': {
-        'title': 'Advocate AGAINST',
-        'position': 'against',
-        'role': 'Argue against the proposition',
-        'prompt_prefix': 'You are the Advocate AGAINST the proposition. Build the strongest possible case against. Find counterexamples, risks, and logical arguments that oppose this position.'
-    }
-}
-
-# Devil's Advocate mode personas (Red/Blue/Purple team)
-DEVILS_ADVOCATE_PERSONAS = {
-    'claude': {
-        'title': 'Purple Team (Integrator)',
-        'team': 'purple',
-        'role': 'Synthesize and integrate valid critiques',
-        'prompt_prefix': 'You are Purple Team (Integrator). Your role is to synthesize Red Team critiques and Blue Team defenses. Identify which concerns are valid and should be addressed vs. which are mitigated.'
-    },
-    'gemini': {
-        'title': 'Red Team (Attacker)',
-        'team': 'red',
-        'role': 'Systematically attack and find weaknesses',
-        'prompt_prefix': 'You are Red Team (Attacker). Your role is to systematically find every possible weakness, edge case, security flaw, and failure mode. Be ruthless and thorough in identifying vulnerabilities.'
-    },
-    'codex': {
-        'title': 'Blue Team (Defender)',
-        'team': 'blue',
-        'role': 'Defend and justify the proposal',
-        'prompt_prefix': 'You are Blue Team (Defender). Your role is to defend the proposal, justify design decisions, and show how concerns are mitigated. Provide evidence that the approach is sound.'
-    }
-}
-
-def get_persona_set(mode: str) -> dict:
-    """Get the appropriate persona set based on deliberation mode."""
-    if mode == 'debate':
-        return DEBATE_PERSONAS
-    elif mode == 'devil_advocate':
-        return DEVILS_ADVOCATE_PERSONAS
-    else:  # consensus, vote, specialist
-        return PERSONAS
+# NOTE: All personas are now generated dynamically via LLM (generate_personas_with_llm)
+# No hardcoded personas - Chairman creates optimal experts based on query type and mode
 
 # ============================================================================
 # CLI Adapters
@@ -225,83 +149,25 @@ def get_available_models(requested_models: List[str]) -> List[str]:
             available.append(model)
     return available
 
-def create_original_thinking_personas(base_model: str, count: int) -> dict:
-    """
-    Create 'original thinking' personas for model instances when using fallback.
-
-    These personas emphasize unconventional thinking and diverse perspectives
-    to ensure robust deliberation even when using the same underlying model.
-
-    Args:
-        base_model: The base model name (claude, gemini, or codex)
-        count: Number of personas to create
-
-    Returns:
-        Dictionary mapping model_instance_id -> persona definition
-    """
-    original_personas = [
-        {
-            'title': 'Unconventional Strategist',
-            'specializations': ['contrarian thinking', 'challenging assumptions', 'non-obvious solutions'],
-            'role': 'Challenge conventional wisdom and propose contrarian approaches',
-            'prompt_prefix': 'You are an Unconventional Strategist. Your role is to challenge conventional wisdom, question popular assumptions, and propose contrarian approaches that others might overlook. Think creatively and divergently.'
-        },
-        {
-            'title': 'Systems Thinker',
-            'specializations': ['second-order effects', 'emergent properties', 'complex systems', 'feedback loops'],
-            'role': 'Analyze second-order effects and emergent system properties',
-            'prompt_prefix': 'You are a Systems Thinker. Focus on second-order effects, emergent properties, feedback loops, and how components interact in complex systems. Look beyond immediate consequences.'
-        },
-        {
-            'title': 'First Principles Analyst',
-            'specializations': ['fundamental truths', 'rebuilding from scratch', 'questioning everything'],
-            'role': 'Rebuild thinking from fundamental truths',
-            'prompt_prefix': 'You are a First Principles Analyst. Break down every assumption to fundamental truths and rebuild your reasoning from scratch. Question everything and derive insights from first principles.'
-        },
-        {
-            'title': 'Pragmatic Implementer',
-            'specializations': ['practical constraints', 'implementation reality', 'operational feasibility'],
-            'role': 'Focus on practical implementation and real-world constraints',
-            'prompt_prefix': 'You are a Pragmatic Implementer. Focus on what actually works in practice, consider implementation constraints, and prioritize operational feasibility over theoretical perfection.'
-        },
-        {
-            'title': 'Innovation Catalyst',
-            'specializations': ['paradigm shifts', 'breakthrough thinking', 'novel approaches'],
-            'role': 'Seek paradigm shifts and breakthrough innovations',
-            'prompt_prefix': 'You are an Innovation Catalyst. Look for paradigm shifts, breakthrough innovations, and entirely novel approaches. Don\'t accept "best practices" - invent better practices.'
-        }
-    ]
-
-    # Create persona instances
-    personas = {}
-    for i in range(count):
-        instance_id = f"{base_model}_instance_{i+1}"
-        persona = original_personas[i % len(original_personas)].copy()
-        personas[instance_id] = persona
-
-    return personas
-
-def expand_models_with_fallback(requested_models: List[str], min_models: int = 3) -> Tuple[List[str], dict]:
+def expand_models_with_fallback(requested_models: List[str], min_models: int = 3) -> List[str]:
     """
     Expand model list with fallback if some models are unavailable.
 
     If fewer than min_models are available, duplicates available models
-    with different 'original thinking' personas to ensure diverse perspectives.
+    to ensure sufficient perspectives. Personas will be generated dynamically via LLM.
 
     Args:
         requested_models: List of requested model names
         min_models: Minimum number of model instances required (default: 3)
 
     Returns:
-        Tuple of (expanded_model_list, fallback_personas_dict)
-        - expanded_model_list: List of model instance IDs to use
-        - fallback_personas_dict: Mapping of instance_id -> persona (empty if no fallback)
+        List of model instance IDs to use (may include duplicates like 'claude_instance_1')
     """
     available = get_available_models(requested_models)
 
     if len(available) >= min_models:
         # All good - use available models as-is
-        return available, {}
+        return available
 
     if len(available) == 0:
         raise RuntimeError("No model CLIs are available. Please install and authenticate at least one of: claude, gemini, codex")
@@ -312,21 +178,19 @@ def expand_models_with_fallback(requested_models: List[str], min_models: int = 3
         'requested': requested_models,
         'available': available,
         'min_required': min_models,
-        'msg': f'Only {len(available)} model(s) available - using fallback with original thinking personas'
+        'msg': f'Only {len(available)} model(s) available - expanding with LLM-generated diverse personas'
     })
 
     expanded_models = []
-    fallback_personas = {}
 
     # Calculate how many instances we need per available model
     instances_needed = min_models
     instances_per_model = (instances_needed + len(available) - 1) // len(available)  # Ceiling division
 
     for model in available:
-        personas = create_original_thinking_personas(model, instances_per_model)
-        for instance_id, persona in personas.items():
+        for i in range(instances_per_model):
+            instance_id = f"{model}_instance_{i+1}"
             expanded_models.append(instance_id)
-            fallback_personas[instance_id] = persona
 
             if len(expanded_models) >= min_models:
                 break
@@ -334,7 +198,7 @@ def expand_models_with_fallback(requested_models: List[str], min_models: int = 3
         if len(expanded_models) >= min_models:
             break
 
-    return expanded_models[:min_models], fallback_personas
+    return expanded_models[:min_models]
 
 async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout: int) -> LLMResponse:
     """
@@ -507,25 +371,15 @@ ADAPTERS = {
 # Prompts
 # ============================================================================
 
-def build_opinion_prompt(query: str, model: str = None, round_num: int = 1, previous_context: str = None, mode: str = 'consensus', code_context: str = None, fallback_personas: dict = None, dynamic_persona: Persona = None) -> str:
-    # Add persona prefix
+def build_opinion_prompt(query: str, model: str = None, round_num: int = 1, previous_context: str = None, mode: str = 'consensus', code_context: str = None, dynamic_persona: Persona = None) -> str:
+    # Add persona prefix - always use dynamic_persona (generated by LLM or PersonaManager)
     persona_prefix = ""
 
     if dynamic_persona:
-        # Use dynamically assigned persona (NEW!)
         persona_prefix = f"<persona>\n{dynamic_persona.prompt_prefix}\nRole: {dynamic_persona.role}\n</persona>\n\n"
-    elif model:
-        # Fallback to old persona system if dynamic not provided
-        persona_set = get_persona_set(mode)
-
-        # Check fallback personas first (for model instances like 'claude_instance_1')
-        if fallback_personas and model in fallback_personas:
-            persona = fallback_personas[model]
-            persona_prefix = f"<persona>\n{persona['prompt_prefix']}\nRole: {persona['role']}\n</persona>\n\n"
-        # Then check standard personas (for base models like 'claude')
-        elif model in persona_set:
-            persona = persona_set[model]
-            persona_prefix = f"<persona>\n{persona['prompt_prefix']}\nRole: {persona['role']}\n</persona>\n\n"
+    else:
+        # Should never happen - gather_opinions always generates personas
+        raise ValueError(f"No dynamic persona provided for model {model}. All personas must be dynamically generated.")
 
     # Add code/implementation context if provided
     code_context_block = ""
@@ -634,17 +488,16 @@ Resolve contradictions OR present alternatives. Respond with JSON:
 def build_context_from_previous_rounds(current_model: str, opinions: dict[str, str], anonymize: bool = True, mode: str = 'consensus') -> str:
     """Build context showing what OTHER models said (excluding current model)."""
     context_parts = []
-    persona_set = get_persona_set(mode)
 
     for model, opinion in opinions.items():
         if model == current_model:
             continue  # Don't show model its own previous response
 
-        # Anonymize or show persona title
+        # Anonymize or use model name (persona titles are in the response JSON if needed)
         if anonymize:
             label = f"Participant {chr(65 + len(context_parts))}"
         else:
-            label = persona_set.get(model, {}).get('title', model)
+            label = model
 
         # Extract key points from opinion JSON
         try:
@@ -775,25 +628,40 @@ def get_base_model(model_instance: str) -> str:
         return model_instance.split('_instance_')[0]
     return model_instance
 
-async def generate_personas_with_llm(query: str, num_models: int, chairman: str, timeout: int = 60) -> List[Persona]:
+async def generate_personas_with_llm(query: str, num_models: int, chairman: str, mode: str = 'consensus', timeout: int = 60) -> List[Persona]:
     """
     Generate optimal personas dynamically using LLM (Chairman).
 
     Instead of using hardcoded persona library, ask the Chairman to create
-    the most relevant expert personas for this specific question.
+    the most relevant expert personas for this specific question and deliberation mode.
 
     Args:
         query: The question to analyze
         num_models: Number of personas to generate
         chairman: Which model to use as Chairman (typically 'claude')
+        mode: Deliberation mode (consensus, debate, devil_advocate, etc.)
         timeout: Timeout for LLM call
 
     Returns:
         List of dynamically generated Persona objects
     """
+    # Mode-specific instructions for persona generation
+    mode_instructions = {
+        'consensus': 'Generate complementary expert personas with diverse specializations to analyze all aspects of the question.',
+        'debate': 'Generate adversarial personas: one NEUTRAL analyst, one advocate FOR the proposition, one advocate AGAINST. They should argue opposing positions.',
+        'devil_advocate': 'Generate Red Team/Blue Team/Purple Team personas: Red Team (attacker finding flaws), Blue Team (defender justifying approach), Purple Team (integrator synthesizing critiques).',
+        'vote': 'Generate expert personas with clear domain expertise to vote on the decision with justifications.',
+        'specialist': 'Generate highly specialized expert personas most suited to this specific domain.'
+    }
+
+    mode_instruction = mode_instructions.get(mode, mode_instructions['consensus'])
+
     prompt = f"""You must respond with ONLY a JSON array. No preamble, no markdown, no explanation.
 
-Generate {num_models} complementary expert personas for this question: {query}
+Generate {num_models} personas for {mode} mode deliberation on: {query}
+
+Mode: {mode}
+Instructions: {mode_instruction}
 
 Output format (JSON array only):
 [
@@ -801,7 +669,7 @@ Output format (JSON array only):
   {{"title": "Expert Name 2", "role": "What they analyze", "specializations": ["spec1", "spec2"], "prompt_prefix": "You are Expert Name 2. Your analytical approach..."}}
 ]
 
-Be creative and specific to THIS question. Example personas: Computational Ethicist, Game Theorist, Economic Historian, Geopolitical Analyst, etc.
+Be creative and specific to THIS question and mode. For debate mode, ensure adversarial positions. For devil's advocate, include Red/Blue/Purple team roles.
 
 JSON array only, start with [ and end with ]:"""
 
@@ -847,22 +715,15 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
     """Gather opinions from all available models in parallel."""
     emit({"type": "status", "stage": 1, "msg": f"Collecting opinions (Round {round_num}, Mode: {config.mode})..."})
 
-    # Dynamically assign personas based on query type (for consensus mode only)
-    assigned_personas = None
-    if config.mode == 'consensus' and not config.fallback_personas:
-        if USE_LLM_GENERATED_PERSONAS:
-            # Generate personas using LLM (Chairman decides optimal experts)
-            assigned_personas = await generate_personas_with_llm(
-                config.query,
-                len(config.models),
-                config.chairman,
-                timeout=30
-            )
-        else:
-            # Use PersonaManager library (rule-based assignment)
-            assigned_personas = PERSONA_MANAGER.assign_personas(config.query, len(config.models))
-            emit({"type": "dynamic_personas", "query_type": PERSONA_MANAGER.analyze_query_type(config.query).value,
-                  "personas": [p.title for p in assigned_personas]})
+    # Always generate personas dynamically for ALL modes via LLM
+    # Generate personas using LLM (Chairman decides optimal experts based on query and mode)
+    assigned_personas = await generate_personas_with_llm(
+        config.query,
+        len(config.models),
+        config.chairman,
+        mode=config.mode,
+        timeout=30
+    )
 
     tasks = []
     available_models = []
@@ -893,18 +754,11 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
                 previous_context=previous_context,
                 mode=config.mode,
                 code_context=config.context,
-                fallback_personas=config.fallback_personas,
                 dynamic_persona=dynamic_persona
             )
 
-            # Get persona title for logging
-            if dynamic_persona:
-                persona_title = dynamic_persona.title
-            elif config.fallback_personas and model_instance in config.fallback_personas:
-                persona_title = config.fallback_personas[model_instance].get('title', model_instance)
-            else:
-                persona_set = get_persona_set(config.mode)
-                persona_title = persona_set.get(model_instance, {}).get('title', model_instance)
+            # Get persona title for logging (always from dynamic_persona now)
+            persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
             emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title})
             tasks.append(ADAPTERS[base_model](prompt, config.timeout))
@@ -1166,8 +1020,7 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
         council_budget=config.council_budget,
         output_level=config.output_level,
         max_rounds=config.max_rounds,
-        context=config.context,
-        fallback_personas=config.fallback_personas
+        context=config.context
     )
 
     consensus_result = await run_council(consensus_config)
@@ -1204,8 +1057,7 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
         council_budget=config.council_budget,
         output_level=config.output_level,
         max_rounds=config.max_rounds,
-        context=config.context,
-        fallback_personas=config.fallback_personas
+        context=config.context
     )
 
     debate_result = await run_council(debate_config)
@@ -1261,8 +1113,7 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
         council_budget=config.council_budget,
         output_level=config.output_level,
         max_rounds=config.max_rounds,
-        context=config.context,
-        fallback_personas=config.fallback_personas
+        context=config.context
     )
 
     devils_result = await run_council(devils_config)
@@ -1318,7 +1169,7 @@ def main():
 
     # Apply fallback for unavailable models
     requested_models = args.models.split(',')
-    expanded_models, fallback_personas = expand_models_with_fallback(requested_models, min_models=3)
+    expanded_models = expand_models_with_fallback(requested_models, min_models=3)
 
     config = SessionConfig(
         query=args.query,
@@ -1330,8 +1181,7 @@ def main():
         council_budget=args.budget,
         output_level=args.output,
         max_rounds=args.max_rounds,
-        context=args.context,
-        fallback_personas=fallback_personas if fallback_personas else None
+        context=args.context
     )
 
     # Adaptive cascade or single mode
