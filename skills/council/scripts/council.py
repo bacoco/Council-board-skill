@@ -14,7 +14,23 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Literal, Optional, List
+from typing import Literal, Optional, List, Tuple
+
+# ============================================================================
+# Constants
+# ============================================================================
+
+# Context and truncation settings
+CONTEXT_TRUNCATE_LENGTH = 300  # Characters to show from previous round answers
+
+# Convergence detection weights and thresholds
+CONVERGENCE_CONFIDENCE_WEIGHT = 0.6  # Weight for average confidence score
+CONVERGENCE_SIGNAL_WEIGHT = 0.4      # Weight for explicit convergence signals
+CONVERGENCE_THRESHOLD = 0.8          # Threshold for declaring convergence
+
+# Session settings
+MIN_QUORUM = 2  # Minimum valid responses required per round
+DEFAULT_TIMEOUT = 60  # Default timeout in seconds for CLI calls
 
 # ============================================================================
 # Data Classes
@@ -22,17 +38,16 @@ from typing import Literal, Optional, List
 
 @dataclass
 class LLMResponse:
+    """Response from a single LLM query via CLI."""
     content: str
     model: str
-    tokens_in: int
-    tokens_out: int
-    cost_usd: float
     latency_ms: int
     success: bool
     error: Optional[str] = None
 
 @dataclass
 class SessionConfig:
+    """Configuration for a council deliberation session."""
     query: str
     mode: str
     models: List[str]
@@ -41,7 +56,6 @@ class SessionConfig:
     anonymize: bool
     council_budget: str
     output_level: str
-    redact_secrets: bool
     max_rounds: int
 
 # ============================================================================
@@ -124,131 +138,140 @@ def get_persona_set(mode: str) -> dict:
         return PERSONAS
 
 # ============================================================================
-# Security
-# ============================================================================
-
-SECRET_PATTERNS = [
-    (r'sk-[a-zA-Z0-9]{48}', '[REDACTED_OPENAI_KEY]'),
-    (r'AIza[a-zA-Z0-9_-]{35}', '[REDACTED_GOOGLE_KEY]'),
-    (r'ghp_[a-zA-Z0-9]{36}', '[REDACTED_GITHUB_TOKEN]'),
-    (r'(?i)(password|secret|token|key)\s*[:=]\s*\S+', r'\1=[REDACTED]'),
-    (r'-----BEGIN.*PRIVATE KEY-----[\s\S]*?-----END.*PRIVATE KEY-----', '[REDACTED_PRIVATE_KEY]'),
-]
-
-INJECTION_PATTERNS = [
-    r"ignore.*(?:previous|above).*instructions",
-    r"you are now",
-    r"new instruction:",
-]
-
-def redact_secrets(text: str) -> str:
-    for pattern, replacement in SECRET_PATTERNS:
-        text = re.sub(pattern, replacement, text)
-    return text
-
-def check_injection(text: str) -> bool:
-    for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, text, re.I):
-            return True
-    return False
-
-# ============================================================================
 # CLI Adapters
 # ============================================================================
 
+@dataclass
+class CLIConfig:
+    """Configuration for a CLI tool invocation."""
+    name: str
+    args: List[str]
+    use_stdin: bool = False
+
 def check_cli_available(cli: str) -> bool:
+    """Check if a CLI tool is available in PATH."""
     try:
         result = subprocess.run(['which', cli], capture_output=True, timeout=5)
         return result.returncode == 0
-    except:
+    except Exception:
         return False
 
-async def query_claude(prompt: str, timeout: int) -> LLMResponse:
+async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout: int) -> LLMResponse:
+    """
+    Generic CLI query function that works for all model CLIs.
+
+    Args:
+        model_name: Name of the model (for response tracking)
+        cli_config: CLI configuration (command, args, stdin usage)
+        prompt: The prompt to send to the model
+        timeout: Timeout in seconds
+
+    Returns:
+        LLMResponse with content, latency, and success status
+    """
     start = time.time()
+
     try:
-        proc = await asyncio.create_subprocess_exec(
-            'claude', '-p', prompt, '--output-format', 'json',
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        latency = int((time.time() - start) * 1000)
-        
-        if proc.returncode == 0:
-            try:
-                data = json.loads(stdout.decode())
-                content = data.get('result', stdout.decode())
-            except:
-                content = stdout.decode()
-            return LLMResponse(content=content, model='claude', tokens_in=0, tokens_out=0,
-                             cost_usd=0.0, latency_ms=latency, success=True)
+        # Build command
+        cmd = [cli_config.name] + cli_config.args
+
+        # Create subprocess
+        if cli_config.use_stdin:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt.encode()),
+                timeout=timeout
+            )
         else:
-            return LLMResponse(content='', model='claude', tokens_in=0, tokens_out=0,
-                             cost_usd=0.0, latency_ms=latency, success=False, 
-                             error=stderr.decode())
+            # Add prompt to args
+            cmd.extend(['-p', prompt])
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+
+        latency = int((time.time() - start) * 1000)
+
+        if proc.returncode == 0:
+            content = stdout.decode()
+
+            # Special handling for Claude's JSON output format
+            if model_name == 'claude' and '--output-format' in cmd:
+                try:
+                    data = json.loads(content)
+                    content = data.get('result', content)
+                except json.JSONDecodeError:
+                    pass  # Use raw content if not valid JSON
+
+            return LLMResponse(
+                content=content,
+                model=model_name,
+                latency_ms=latency,
+                success=True
+            )
+        else:
+            return LLMResponse(
+                content='',
+                model=model_name,
+                latency_ms=latency,
+                success=False,
+                error=stderr.decode()
+            )
+
     except asyncio.TimeoutError:
-        return LLMResponse(content='', model='claude', tokens_in=0, tokens_out=0,
-                         cost_usd=0.0, latency_ms=timeout*1000, success=False,
-                         error='TIMEOUT')
+        latency = int((time.time() - start) * 1000)
+        return LLMResponse(
+            content='',
+            model=model_name,
+            latency_ms=latency,
+            success=False,
+            error='TIMEOUT'
+        )
     except Exception as e:
-        return LLMResponse(content='', model='claude', tokens_in=0, tokens_out=0,
-                         cost_usd=0.0, latency_ms=0, success=False, error=str(e))
+        latency = int((time.time() - start) * 1000)
+        return LLMResponse(
+            content='',
+            model=model_name,
+            latency_ms=latency,
+            success=False,
+            error=str(e)
+        )
+
+# CLI configurations for each model
+CLI_CONFIGS = {
+    'claude': CLIConfig(
+        name='claude',
+        args=['--output-format', 'json'],
+        use_stdin=False
+    ),
+    'gemini': CLIConfig(
+        name='gemini',
+        args=[],
+        use_stdin=False
+    ),
+    'codex': CLIConfig(
+        name='codex',
+        args=['exec'],
+        use_stdin=True
+    ),
+}
+
+# Adapter functions (wrappers for backward compatibility)
+async def query_claude(prompt: str, timeout: int) -> LLMResponse:
+    return await query_cli('claude', CLI_CONFIGS['claude'], prompt, timeout)
 
 async def query_gemini(prompt: str, timeout: int) -> LLMResponse:
-    start = time.time()
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            'gemini', '-p', prompt,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        latency = int((time.time() - start) * 1000)
-        
-        if proc.returncode == 0:
-            return LLMResponse(content=stdout.decode(), model='gemini', tokens_in=0, 
-                             tokens_out=0, cost_usd=0.0, latency_ms=latency, success=True)
-        else:
-            return LLMResponse(content='', model='gemini', tokens_in=0, tokens_out=0,
-                             cost_usd=0.0, latency_ms=latency, success=False,
-                             error=stderr.decode())
-    except asyncio.TimeoutError:
-        return LLMResponse(content='', model='gemini', tokens_in=0, tokens_out=0,
-                         cost_usd=0.0, latency_ms=timeout*1000, success=False,
-                         error='TIMEOUT')
-    except Exception as e:
-        return LLMResponse(content='', model='gemini', tokens_in=0, tokens_out=0,
-                         cost_usd=0.0, latency_ms=0, success=False, error=str(e))
+    return await query_cli('gemini', CLI_CONFIGS['gemini'], prompt, timeout)
 
 async def query_codex(prompt: str, timeout: int) -> LLMResponse:
-    start = time.time()
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            'codex', 'exec',
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=prompt.encode()),
-            timeout=timeout
-        )
-        latency = int((time.time() - start) * 1000)
-        
-        if proc.returncode == 0:
-            return LLMResponse(content=stdout.decode(), model='codex', tokens_in=0,
-                             tokens_out=0, cost_usd=0.0, latency_ms=latency, success=True)
-        else:
-            return LLMResponse(content='', model='codex', tokens_in=0, tokens_out=0,
-                             cost_usd=0.0, latency_ms=latency, success=False,
-                             error=stderr.decode())
-    except asyncio.TimeoutError:
-        return LLMResponse(content='', model='codex', tokens_in=0, tokens_out=0,
-                         cost_usd=0.0, latency_ms=timeout*1000, success=False,
-                         error='TIMEOUT')
-    except Exception as e:
-        return LLMResponse(content='', model='codex', tokens_in=0, tokens_out=0,
-                         cost_usd=0.0, latency_ms=0, success=False, error=str(e))
+    return await query_cli('codex', CLI_CONFIGS['codex'], prompt, timeout)
 
 ADAPTERS = {
     'claude': query_claude,
@@ -383,20 +406,21 @@ def build_context_from_previous_rounds(current_model: str, opinions: dict[str, s
             opinion_data = extract_json(opinion)
             key_points = opinion_data.get('key_points', [])
             confidence = opinion_data.get('confidence', 0.0)
-            answer = opinion_data.get('answer', opinion)[:300]  # Truncate
+            answer = opinion_data.get('answer', opinion)[:CONTEXT_TRUNCATE_LENGTH]
 
             context_parts.append(f"{label} (confidence: {confidence}):\n{answer}\nKey points: {', '.join(key_points)}")
-        except:
-            context_parts.append(f"{label}:\n{opinion[:300]}")
+        except Exception:
+            context_parts.append(f"{label}:\n{opinion[:CONTEXT_TRUNCATE_LENGTH]}")
 
     return "\n\n".join(context_parts)
 
-def check_convergence(round_responses: list[dict], threshold: float = 0.8) -> tuple[bool, float]:
+def check_convergence(round_responses: list[dict], threshold: float = CONVERGENCE_THRESHOLD) -> Tuple[bool, float]:
     """
     Check if models have converged based on:
     1. Explicit convergence signals
     2. High confidence across models
-    3. Low uncertainty
+
+    Uses weighted combination of confidence scores and explicit signals.
     """
     if not round_responses:
         return False, 0.0
@@ -412,15 +436,15 @@ def check_convergence(round_responses: list[dict], threshold: float = 0.8) -> tu
             data = extract_json(response)
             convergence_signals.append(data.get('convergence_signal', False))
             confidences.append(data.get('confidence', 0.5))
-        except:
+        except Exception:
             convergence_signals.append(False)
             confidences.append(0.5)
 
-    # Calculate convergence score
+    # Calculate convergence score using configured weights
     avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
     explicit_convergence = sum(convergence_signals) / len(convergence_signals) if convergence_signals else 0.0
 
-    convergence_score = (avg_confidence * 0.6) + (explicit_convergence * 0.4)
+    convergence_score = (avg_confidence * CONVERGENCE_CONFIDENCE_WEIGHT) + (explicit_convergence * CONVERGENCE_SIGNAL_WEIGHT)
 
     return convergence_score >= threshold, convergence_score
 
@@ -444,27 +468,26 @@ def anonymize_responses(responses: dict[str, str]) -> tuple[dict[str, str], dict
     return anonymized, mapping
 
 def extract_json(text: str) -> dict:
-    # Try to find JSON in response
+    """Extract JSON from text response, with fallback to raw text."""
     text = text.strip()
     if text.startswith('{'):
         try:
             return json.loads(text)
-        except:
+        except json.JSONDecodeError:
             pass
     # Look for JSON block
     match = re.search(r'\{[\s\S]*\}', text)
     if match:
         try:
             return json.loads(match.group())
-        except:
+        except json.JSONDecodeError:
             pass
     return {"raw": text}
 
 async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None) -> dict[str, LLMResponse]:
+    """Gather opinions from all available models in parallel."""
     persona_set = get_persona_set(config.mode)
     emit({"type": "status", "stage": 1, "msg": f"Collecting opinions (Round {round_num}, Mode: {config.mode})..."})
-
-    safe_query = redact_secrets(config.query)
 
     tasks = []
     available_models = []
@@ -478,7 +501,7 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
                 previous_context = build_context_from_previous_rounds(model, previous_round_opinions, config.anonymize, config.mode)
 
             # Build prompt with persona and previous context
-            prompt = build_opinion_prompt(safe_query, model=model, round_num=round_num, previous_context=previous_context, mode=config.mode)
+            prompt = build_opinion_prompt(config.query, model=model, round_num=round_num, previous_context=previous_context, mode=config.mode)
 
             emit({"type": "opinion_start", "model": model, "round": round_num, "persona": persona_set.get(model, {}).get('title', model)})
             tasks.append(ADAPTERS[model](prompt, config.timeout))
@@ -568,8 +591,8 @@ async def run_council(config: SessionConfig) -> dict:
 
         # Check quorum
         valid_count = sum(1 for r in responses.values() if r.success)
-        if valid_count < 2:
-            emit({"type": "error", "msg": f"Quorum not met in round {round_num} (need >= 2 valid responses)"})
+        if valid_count < MIN_QUORUM:
+            emit({"type": "error", "msg": f"Quorum not met in round {round_num} (need >= {MIN_QUORUM} valid responses)"})
             if round_num == 1:
                 return {"error": "Quorum not met in initial round"}
             else:
@@ -659,14 +682,14 @@ def main():
                        choices=['consensus', 'debate', 'vote', 'specialist', 'devil_advocate'])
     parser.add_argument('--models', default='claude,gemini,codex', help='Comma-separated model list')
     parser.add_argument('--chairman', default='claude', help='Synthesizer model')
-    parser.add_argument('--timeout', type=int, default=60, help='Per-model timeout (seconds)')
+    parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT, help='Per-model timeout (seconds)')
     parser.add_argument('--anonymize', type=bool, default=True, help='Anonymize responses')
     parser.add_argument('--budget', default='balanced', choices=['fast', 'balanced', 'thorough'])
     parser.add_argument('--output', default='standard', choices=['minimal', 'standard', 'audit'])
-    parser.add_argument('--max-rounds', type=int, default=3, help='Max rounds for debate mode')
-    
+    parser.add_argument('--max-rounds', type=int, default=3, help='Max rounds for deliberation')
+
     args = parser.parse_args()
-    
+
     config = SessionConfig(
         query=args.query,
         mode=args.mode,
@@ -676,7 +699,6 @@ def main():
         anonymize=args.anonymize,
         council_budget=args.budget,
         output_level=args.output,
-        redact_secrets=True,
         max_rounds=args.max_rounds
     )
     
