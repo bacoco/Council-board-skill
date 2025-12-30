@@ -1,0 +1,20 @@
+{
+  "name": "council-board",
+  "owner": {
+    "name": "bacoco",
+    "email": "bacoco@users.noreply.github.com"
+  },
+  "metadata": {
+    "description": "Multi-model AI deliberation - get 3 AI perspectives on any question",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "council",
+      "source": ".",
+      "description": "Orchestrates Claude, Gemini, and Codex to debate, challenge, and synthesize answers together",
+      "version": "1.0.0",
+      "strict": false
+    }
+  ]
+}
