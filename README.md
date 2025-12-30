@@ -219,6 +219,17 @@ Reference guides in `skills/council/references/`:
 - `security.md` — Input validation, secret redaction
 - `examples.md` — Usage examples
 
+## Roadmap
+
+Future improvements identified by Council self-evaluation:
+
+- [ ] **Core Logic Tests** — Unit tests for deliberation engine, convergence algorithm, persona generation
+- [ ] **Persistent State** — Save circuit breaker state, metrics, adaptive timeouts across sessions (JSON/SQLite)
+- [ ] **Direct API Providers** — Bypass CLI fragility with native API implementations
+- [ ] **CI/CD Pipeline** — GitHub Actions, automated testing, version compatibility matrix
+- [ ] **Benchmarks** — Compare output quality/cost/latency vs single-model baselines
+- [ ] **Health Checks** — Endpoints for container orchestration, graceful SIGTERM handling
+
 ## License
 
 MIT - [LICENSE](LICENSE)
