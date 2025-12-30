@@ -177,9 +177,11 @@ def test_adaptive_cascade_escalates_to_devils_advocate(monkeypatch):
             calls.append((config.mode, config.timeout))
             if config.mode == "consensus":
                 return {"convergence_score": 0.2, "synthesis": {"confidence": 0.4}}
-            if config.mode == "debate":
+            elif config.mode == "debate":
                 return {"convergence_score": 0.3, "synthesis": {"confidence": 0.5}}
-            return {"convergence_score": 0.95, "synthesis": {"confidence": 0.96}}
+            elif config.mode == "devil_advocate":
+                return {"convergence_score": 0.95, "synthesis": {"confidence": 0.96}}
+            pytest.fail(f"Unexpected council mode received in mock: {config.mode}")
 
         async def fake_meta_synthesize(*args, **kwargs):
             return {"final_answer": "meta", "confidence": 0.9}
