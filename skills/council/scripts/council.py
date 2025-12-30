@@ -7,6 +7,7 @@ CLI entry point for council deliberations.
 import argparse
 import asyncio
 import functools
+import hashlib
 import json
 import random
 import re
@@ -86,6 +87,9 @@ PERSONA_MANAGER = PersonaManager()
 
 # Global InputValidator instance for security
 INPUT_VALIDATOR = InputValidator()
+
+# Session-level persona cache (per session ID)
+SESSION_PERSONA_CACHE: dict[str, dict[str, List[Persona]]] = {}
 
 # ============================================================================
 # Circuit Breaker Pattern
@@ -493,6 +497,9 @@ class SessionMetrics:
         self._rounds = 0
         self._round_latencies = []
 
+        # Persona cache tracking
+        self._persona_cache_events = []
+
     def record_latency(self, stage: str, latency_ms: float):
         """Record latency for a processing stage."""
         if stage in self._stage_latencies:
@@ -515,6 +522,16 @@ class SessionMetrics:
         """Record completion of a deliberation round."""
         self._rounds = round_num
         self._round_latencies.append(latency_ms)
+
+    def record_persona_cache(self, cached: bool, latency_ms: Optional[float] = None):
+        """Record persona cache usage for observability."""
+        event = {
+            "cached": cached,
+            "timestamp": time.time()
+        }
+        if latency_ms is not None:
+            event["generation_ms"] = latency_ms
+        self._persona_cache_events.append(event)
 
     def emit_event(self, event_type: str, details: dict = None):
         """
@@ -601,6 +618,7 @@ class SessionMetrics:
             "stage_latencies": stage_stats,
             "model_stats": model_stats,
             "aggregate_model_latency": self._latency_stats(all_model_latencies),
+            "persona_cache": self._persona_cache_events,
             "events": [e["event"] for e in self._events],
             "event_count": len(self._events),
         }
@@ -627,6 +645,13 @@ def init_metrics(session_id: str) -> SessionMetrics:
 def get_metrics() -> Optional[SessionMetrics]:
     """Get current session metrics."""
     return CURRENT_METRICS
+
+def get_current_session_id() -> str:
+    """Return current session identifier for cache scoping."""
+    metrics = get_metrics()
+    if metrics:
+        return metrics.session_id
+    return "global"
 
 # ============================================================================
 # Data Classes
@@ -1417,6 +1442,26 @@ async def generate_personas_with_llm(query: str, num_models: int, chairman: str,
     Returns:
         List of dynamically generated Persona objects
     """
+    metrics = get_metrics()
+    session_id = get_current_session_id()
+    cache_bucket = SESSION_PERSONA_CACHE.setdefault(session_id, {})
+    cache_key = f"{mode}:{hashlib.sha256(query.encode('utf-8')).hexdigest()}"
+
+    # Cache hit - reuse personas from earlier round
+    if cache_key in cache_bucket:
+        if metrics:
+            metrics.record_persona_cache(True)
+        return [
+            Persona(
+                title=p.title,
+                role=p.role,
+                prompt_prefix=p.prompt_prefix,
+                specializations=list(p.specializations)
+            ) for p in cache_bucket[cache_key]
+        ]
+
+    persona_start = time.time()
+
     # Mode-specific instructions for persona generation (HYBRID: creative titles + grounded roles)
     # NOTE: Specialist mode was evaluated by the Council and voted down (3-0) as premature optimization.
     #       Modern LLMs handle cross-domain queries well; routing adds complexity without proven benefit.
@@ -1474,7 +1519,14 @@ JSON array only, start with [ and end with ]:"""
                 elif isinstance(personas_data, dict) and 'raw' in personas_data:
                     # Failed to parse JSON properly
                     emit({"type": "persona_generation_failed", "msg": "Failed to parse Chairman response, using fallback"})
-                    return PERSONA_MANAGER.assign_personas(query, num_models)
+                    cache_bucket.pop(cache_key, None)
+                    personas = PERSONA_MANAGER.assign_personas(query, num_models)
+                    if metrics:
+                        elapsed_ms = int((time.time() - persona_start) * 1000)
+                        metrics.record_persona_cache(False, elapsed_ms)
+                        metrics.record_latency('persona_gen', elapsed_ms)
+                    cache_bucket[cache_key] = personas
+                    return personas
 
                 personas = []
                 for p in personas_data[:num_models]:  # Ensure we only use requested count
@@ -1487,16 +1539,35 @@ JSON array only, start with [ and end with ]:"""
                     personas.append(persona)
 
                 emit({"type": "persona_generation_success", "personas": [p.title for p in personas]})
+                cache_bucket[cache_key] = personas
+                if metrics:
+                    elapsed_ms = int((time.time() - persona_start) * 1000)
+                    metrics.record_persona_cache(False, elapsed_ms)
+                    metrics.record_latency('persona_gen', elapsed_ms)
                 return personas
 
             except Exception as e:
                 emit({"type": "persona_generation_error", "error": str(e)})
                 # Fallback to PersonaManager library
-                return PERSONA_MANAGER.assign_personas(query, num_models)
+                cache_bucket.pop(cache_key, None)
+                personas = PERSONA_MANAGER.assign_personas(query, num_models)
+                if metrics:
+                    elapsed_ms = int((time.time() - persona_start) * 1000)
+                    metrics.record_persona_cache(False, elapsed_ms)
+                    metrics.record_latency('persona_gen', elapsed_ms)
+                cache_bucket[cache_key] = personas
+                return personas
 
     # Fallback if chairman unavailable
     emit({"type": "persona_generation_fallback", "msg": "Chairman unavailable, using PersonaManager"})
-    return PERSONA_MANAGER.assign_personas(query, num_models)
+    cache_bucket.pop(cache_key, None)
+    personas = PERSONA_MANAGER.assign_personas(query, num_models)
+    if metrics:
+        elapsed_ms = int((time.time() - persona_start) * 1000)
+        metrics.record_persona_cache(False, elapsed_ms)
+        metrics.record_latency('persona_gen', elapsed_ms)
+    cache_bucket[cache_key] = personas
+    return personas
 
 async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None) -> dict[str, LLMResponse]:
     """Gather opinions from all available models in parallel with graceful degradation."""
@@ -1506,11 +1577,7 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
     degradation = get_degradation_state()
     adaptive_timeout = get_adaptive_timeout()
 
-    # Track persona generation latency
-    persona_start = time.time()
-
-    # Always generate personas dynamically for ALL modes via LLM
-    # Generate personas using LLM (Chairman decides optimal experts based on query and mode)
+    # Always generate personas dynamically for ALL modes via LLM (with caching)
     assigned_personas = await generate_personas_with_llm(
         config.query,
         len(config.models),
@@ -1518,11 +1585,6 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
         mode=config.mode,
         timeout=30
     )
-
-    # Record persona generation latency
-    metrics = get_metrics()
-    if metrics:
-        metrics.record_latency('persona_gen', int((time.time() - persona_start) * 1000))
 
     tasks = []
     available_models = []
