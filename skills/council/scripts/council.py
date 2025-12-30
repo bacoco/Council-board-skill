@@ -197,6 +197,226 @@ class CircuitBreaker:
 CIRCUIT_BREAKER = CircuitBreaker()
 
 # ============================================================================
+# Graceful Degradation
+# ============================================================================
+
+class DegradationLevel:
+    """Enumeration of degradation levels."""
+    FULL = 'full'           # All models operational
+    DEGRADED = 'degraded'   # Some models failed, operating with reduced capacity
+    MINIMAL = 'minimal'     # Critical degradation, minimum viable operation
+
+
+class DegradationState:
+    """
+    Tracks graceful degradation state across a council session.
+
+    Monitors model availability, adjusts quality expectations, and provides
+    degradation-aware confidence scoring.
+
+    Usage:
+        state = DegradationState(expected_models=['claude', 'gemini', 'codex'])
+        state.record_model_unavailable('gemini', 'TIMEOUT')
+        adjusted_confidence = state.adjust_confidence(0.85)
+        summary = state.get_summary()
+    """
+
+    # Confidence penalties per degradation level
+    CONFIDENCE_PENALTIES = {
+        DegradationLevel.FULL: 0.0,
+        DegradationLevel.DEGRADED: 0.10,  # 10% penalty
+        DegradationLevel.MINIMAL: 0.25,   # 25% penalty
+    }
+
+    def __init__(self, expected_models: List[str]):
+        self.expected_models = set(expected_models)
+        self.available_models = set(expected_models)
+        self.failed_models = {}  # model -> error reason
+        self.recovered_models = set()  # models that recovered mid-session
+        self._level = DegradationLevel.FULL
+        self._events = []
+        self._start_time = time.time()
+
+    @property
+    def level(self) -> str:
+        """Current degradation level based on model availability."""
+        available_count = len(self.available_models)
+        expected_count = len(self.expected_models)
+
+        if available_count == expected_count:
+            return DegradationLevel.FULL
+        elif available_count >= MIN_QUORUM:
+            return DegradationLevel.DEGRADED
+        else:
+            return DegradationLevel.MINIMAL
+
+    def record_model_unavailable(self, model: str, reason: str):
+        """Record a model becoming unavailable."""
+        if model in self.available_models:
+            self.available_models.discard(model)
+            self.failed_models[model] = reason
+
+            event = {
+                'type': 'model_degraded',
+                'model': model,
+                'reason': reason,
+                'level': self.level,
+                'available_count': len(self.available_models),
+                'timestamp': time.time()
+            }
+            self._events.append(event)
+            emit(event)
+
+    def record_model_recovered(self, model: str):
+        """Record a model recovering (e.g., circuit breaker closing)."""
+        if model in self.failed_models:
+            self.available_models.add(model)
+            self.recovered_models.add(model)
+
+            event = {
+                'type': 'model_recovered',
+                'model': model,
+                'level': self.level,
+                'available_count': len(self.available_models),
+                'timestamp': time.time()
+            }
+            self._events.append(event)
+            emit(event)
+
+    def adjust_confidence(self, raw_confidence: float) -> float:
+        """
+        Adjust confidence score based on degradation level.
+
+        When operating in degraded mode, confidence is reduced to reflect
+        the lower reliability of having fewer model perspectives.
+        """
+        penalty = self.CONFIDENCE_PENALTIES.get(self.level, 0.0)
+        adjusted = raw_confidence * (1.0 - penalty)
+        return round(max(0.0, min(1.0, adjusted)), 3)
+
+    def can_continue(self) -> bool:
+        """Check if session can continue (meets minimum quorum)."""
+        return len(self.available_models) >= MIN_QUORUM
+
+    def get_fallback_models(self) -> List[str]:
+        """Get list of available models for fallback operations."""
+        return list(self.available_models)
+
+    def get_summary(self) -> dict:
+        """Get degradation state summary for observability."""
+        return {
+            'level': self.level,
+            'expected_models': list(self.expected_models),
+            'available_models': list(self.available_models),
+            'failed_models': self.failed_models,
+            'recovered_models': list(self.recovered_models),
+            'availability_ratio': len(self.available_models) / max(1, len(self.expected_models)),
+            'event_count': len(self._events),
+            'duration_ms': int((time.time() - self._start_time) * 1000)
+        }
+
+
+class AdaptiveTimeout:
+    """
+    Adaptive timeout based on model performance history.
+
+    Learns from model response times and adjusts timeouts dynamically
+    to balance reliability with responsiveness.
+
+    Usage:
+        timeout = AdaptiveTimeout(base_timeout=60)
+        adjusted = timeout.get_timeout('claude')  # Returns adaptive timeout
+        timeout.record_latency('claude', 2500, success=True)
+    """
+
+    # Timeout adjustment factors
+    MIN_TIMEOUT_FACTOR = 0.5   # Never go below 50% of base
+    MAX_TIMEOUT_FACTOR = 2.0   # Never exceed 200% of base
+    SAFETY_MARGIN = 1.5        # Add 50% to observed p95 for safety
+    MIN_SAMPLES = 3            # Minimum samples before adapting
+
+    def __init__(self, base_timeout: int = DEFAULT_TIMEOUT):
+        self.base_timeout = base_timeout
+        self._latencies = {}  # model -> list of latencies
+        self._timeouts = {}   # model -> list of timeout occurrences
+
+    def record_latency(self, model: str, latency_ms: float, success: bool = True):
+        """Record a model call latency."""
+        base_model = get_base_model(model) if '_instance_' in model else model
+
+        if base_model not in self._latencies:
+            self._latencies[base_model] = []
+            self._timeouts[base_model] = 0
+
+        if success:
+            self._latencies[base_model].append(latency_ms)
+            # Keep only last 20 samples for recency bias
+            self._latencies[base_model] = self._latencies[base_model][-20:]
+        else:
+            self._timeouts[base_model] += 1
+
+    def get_timeout(self, model: str) -> int:
+        """Get adaptive timeout for a model."""
+        base_model = get_base_model(model) if '_instance_' in model else model
+        latencies = self._latencies.get(base_model, [])
+
+        if len(latencies) < self.MIN_SAMPLES:
+            # Not enough data - use base timeout
+            return self.base_timeout
+
+        # Calculate p95 latency
+        sorted_latencies = sorted(latencies)
+        p95_index = int(len(sorted_latencies) * 0.95)
+        p95_latency = sorted_latencies[min(p95_index, len(sorted_latencies) - 1)]
+
+        # Apply safety margin and convert to seconds
+        adaptive_timeout = int((p95_latency * self.SAFETY_MARGIN) / 1000)
+
+        # Clamp to allowed range
+        min_timeout = int(self.base_timeout * self.MIN_TIMEOUT_FACTOR)
+        max_timeout = int(self.base_timeout * self.MAX_TIMEOUT_FACTOR)
+
+        return max(min_timeout, min(max_timeout, adaptive_timeout))
+
+    def get_stats(self) -> dict:
+        """Get timeout statistics for all models."""
+        stats = {}
+        for model, latencies in self._latencies.items():
+            if latencies:
+                stats[model] = {
+                    'samples': len(latencies),
+                    'avg_ms': int(sum(latencies) / len(latencies)),
+                    'max_ms': int(max(latencies)),
+                    'adaptive_timeout_s': self.get_timeout(model),
+                    'timeout_count': self._timeouts.get(model, 0)
+                }
+        return stats
+
+
+# Global instances
+DEGRADATION_STATE: Optional[DegradationState] = None
+ADAPTIVE_TIMEOUT: Optional[AdaptiveTimeout] = None
+
+
+def init_degradation(expected_models: List[str], base_timeout: int = DEFAULT_TIMEOUT) -> Tuple[DegradationState, AdaptiveTimeout]:
+    """Initialize degradation tracking for a new session."""
+    global DEGRADATION_STATE, ADAPTIVE_TIMEOUT
+    DEGRADATION_STATE = DegradationState(expected_models)
+    ADAPTIVE_TIMEOUT = AdaptiveTimeout(base_timeout)
+    return DEGRADATION_STATE, ADAPTIVE_TIMEOUT
+
+
+def get_degradation_state() -> Optional[DegradationState]:
+    """Get current degradation state."""
+    return DEGRADATION_STATE
+
+
+def get_adaptive_timeout() -> Optional[AdaptiveTimeout]:
+    """Get current adaptive timeout manager."""
+    return ADAPTIVE_TIMEOUT
+
+
+# ============================================================================
 # Observability & Metrics
 # ============================================================================
 
@@ -1182,8 +1402,12 @@ JSON array only, start with [ and end with ]:"""
     return PERSONA_MANAGER.assign_personas(query, num_models)
 
 async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None) -> dict[str, LLMResponse]:
-    """Gather opinions from all available models in parallel."""
+    """Gather opinions from all available models in parallel with graceful degradation."""
     emit({"type": "status", "stage": 1, "msg": f"Collecting opinions (Round {round_num}, Mode: {config.mode})..."})
+
+    # Get graceful degradation managers
+    degradation = get_degradation_state()
+    adaptive_timeout = get_adaptive_timeout()
 
     # Track persona generation latency
     persona_start = time.time()
@@ -1205,11 +1429,19 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
 
     tasks = []
     available_models = []
+    model_timeouts = []  # Track timeout per model for adaptive timeout
     model_index = 0
 
     for model_instance in config.models:
         # Extract base model from instance ID (e.g., 'claude_instance_1' -> 'claude')
         base_model = get_base_model(model_instance)
+
+        # Check circuit breaker before including model
+        if not CIRCUIT_BREAKER.can_call(base_model):
+            emit({"type": "opinion_skip", "model": model_instance, "reason": "circuit_breaker_open"})
+            if degradation:
+                degradation.record_model_unavailable(model_instance, "circuit_breaker_open")
+            continue
 
         if base_model in ADAPTERS and check_cli_available(base_model):
             available_models.append(model_instance)
@@ -1238,25 +1470,57 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             # Get persona title for logging (always from dynamic_persona now)
             persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-            emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title})
-            tasks.append(ADAPTERS[base_model](prompt, config.timeout))
+            # Use adaptive timeout if available, otherwise config timeout
+            model_timeout = adaptive_timeout.get_timeout(base_model) if adaptive_timeout else config.timeout
+            model_timeouts.append(model_timeout)
+
+            emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title, "timeout": model_timeout})
+            tasks.append(ADAPTERS[base_model](prompt, model_timeout))
             model_index += 1
         else:
             emit({"type": "opinion_error", "model": model_instance, "error": "CLI not available", "status": "ABSTENTION"})
+            if degradation:
+                degradation.record_model_unavailable(model_instance, "cli_not_available")
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     responses = {}
     for model_instance, result in zip(available_models, results):
+        base_model = get_base_model(model_instance)
+
         if isinstance(result, Exception):
             emit({"type": "opinion_error", "model": model_instance, "error": str(result), "status": "ABSTENTION"})
             responses[model_instance] = LLMResponse(content='', model=model_instance, latency_ms=0, success=False, error=str(result))
+            # Track failure in degradation state
+            if degradation:
+                degradation.record_model_unavailable(model_instance, str(result))
+            if adaptive_timeout:
+                adaptive_timeout.record_latency(base_model, 0, success=False)
         else:
+            # Record latency for adaptive timeout learning
+            if adaptive_timeout:
+                adaptive_timeout.record_latency(base_model, result.latency_ms, success=result.success)
+
             if result.success:
                 emit({"type": "opinion_complete", "model": model_instance, "round": round_num, "latency_ms": result.latency_ms})
+                # Check if model recovered (was previously failed)
+                if degradation and model_instance in degradation.failed_models:
+                    degradation.record_model_recovered(model_instance)
             else:
                 emit({"type": "opinion_error", "model": model_instance, "error": result.error, "status": "ABSTENTION"})
+                if degradation:
+                    degradation.record_model_unavailable(model_instance, result.error or "unknown_error")
             responses[model_instance] = result
+
+    # Emit degradation status if any models failed
+    if degradation and degradation.level != DegradationLevel.FULL:
+        emit({
+            "type": "degradation_status",
+            "level": degradation.level,
+            "available_models": list(degradation.available_models),
+            "failed_models": degradation.failed_models,
+            "round": round_num
+        })
 
     return responses
 
@@ -1380,6 +1644,9 @@ async def run_council(config: SessionConfig) -> dict:
     # Initialize observability metrics
     metrics = init_metrics(session_id)
 
+    # Initialize graceful degradation tracking
+    degradation, adaptive_timeout = init_degradation(config.models, config.timeout)
+
     emit({"type": "status", "stage": 0, "msg": f"Starting council session {session_id} (mode: {config.mode}, max_rounds: {config.max_rounds})"})
 
     # Track all rounds
@@ -1459,11 +1726,29 @@ async def run_council(config: SessionConfig) -> dict:
 
     duration_ms = int((time.time() - start_time) * 1000)
 
+    # Get degradation state for final adjustments
+    degradation_summary = degradation.get_summary() if degradation else None
+
+    # Adjust confidence based on degradation level
+    raw_confidence = synthesis.get('confidence', 0.0)
+    adjusted_confidence = degradation.adjust_confidence(raw_confidence) if degradation else raw_confidence
+
+    # Emit partial result warning if operating in degraded mode
+    if degradation and degradation.level != DegradationLevel.FULL:
+        metrics.emit_event('PartialResultReturned', {
+            'degradation_level': degradation.level,
+            'raw_confidence': raw_confidence,
+            'adjusted_confidence': adjusted_confidence,
+            'failed_models': degradation.failed_models
+        })
+
     # Final output
     emit({
         "type": "final",
         "answer": synthesis.get('final_answer', ''),
-        "confidence": synthesis.get('confidence', 0.0),
+        "confidence": adjusted_confidence,
+        "raw_confidence": raw_confidence,
+        "degradation_level": degradation.level if degradation else DegradationLevel.FULL,
         "dissent": synthesis.get('dissenting_view'),
         "rounds_completed": len(all_rounds),
         "converged": converged,
@@ -1472,6 +1757,9 @@ async def run_council(config: SessionConfig) -> dict:
 
     # Get circuit breaker status for transparency
     cb_status = CIRCUIT_BREAKER.get_status()
+
+    # Get adaptive timeout stats
+    timeout_stats = adaptive_timeout.get_stats() if adaptive_timeout else None
 
     # Emit metrics summary
     metrics.emit_summary()
@@ -1484,7 +1772,9 @@ async def run_council(config: SessionConfig) -> dict:
         "mode": config.mode,
         "rounds": len(all_rounds),
         "converged": converged,
-        "circuit_breaker": cb_status if cb_status else None
+        "circuit_breaker": cb_status if cb_status else None,
+        "degradation": degradation_summary,
+        "adaptive_timeout": timeout_stats
     })
 
     return {
@@ -1498,7 +1788,11 @@ async def run_council(config: SessionConfig) -> dict:
         "rounds_completed": len(all_rounds),
         "converged": converged,
         "convergence_score": convergence_score,
+        "confidence": adjusted_confidence,
+        "raw_confidence": raw_confidence,
+        "degradation": degradation_summary,
         "circuit_breaker_status": cb_status,
+        "adaptive_timeout_stats": timeout_stats,
         "metrics": metrics.get_summary()
     }
 
@@ -1565,12 +1859,27 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
     """
     emit({"type": "status", "stage": 1, "msg": "Collecting votes from council members..."})
 
+    # Get graceful degradation managers
+    degradation = get_degradation_state()
+    adaptive_timeout = get_adaptive_timeout()
+
     # First, determine which models are actually available
     available_models = []
     for model_instance in config.models:
         base_model = get_base_model(model_instance)
+
+        # Check circuit breaker before including model
+        if not CIRCUIT_BREAKER.can_call(base_model):
+            emit({"type": "vote_skip", "model": model_instance, "reason": "circuit_breaker_open"})
+            if degradation:
+                degradation.record_model_unavailable(model_instance, "circuit_breaker_open")
+            continue
+
         if base_model in ADAPTERS and check_cli_available(base_model):
             available_models.append(model_instance)
+        else:
+            if degradation:
+                degradation.record_model_unavailable(model_instance, "cli_not_available")
 
     if not available_models:
         emit({"type": "error", "msg": "No models available for voting"})
@@ -1595,7 +1904,10 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
         dynamic_persona = assigned_personas[idx] if idx < len(assigned_personas) else None
         persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-        emit({"type": "vote_start", "model": model_instance, "persona": persona_title})
+        # Use adaptive timeout if available
+        model_timeout = adaptive_timeout.get_timeout(base_model) if adaptive_timeout else config.timeout
+
+        emit({"type": "vote_start", "model": model_instance, "persona": persona_title, "timeout": model_timeout})
 
         prompt = build_vote_prompt(
             config.query,
@@ -1605,7 +1917,7 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
         )
 
         # Store (model, task) pair for robust result matching
-        task = ADAPTERS[base_model](prompt, config.timeout)
+        task = ADAPTERS[base_model](prompt, model_timeout)
         task_model_pairs.append((model_instance, task))
 
     # Execute votes in parallel
@@ -1614,13 +1926,27 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
 
     ballots = []
     for (model_instance, _), result in zip(task_model_pairs, results):
+        base_model = get_base_model(model_instance)
+
         if isinstance(result, Exception):
             emit({"type": "vote_error", "model": model_instance, "error": str(result)})
+            if degradation:
+                degradation.record_model_unavailable(model_instance, str(result))
+            if adaptive_timeout:
+                adaptive_timeout.record_latency(base_model, 0, success=False)
             continue
 
         if not result.success:
             emit({"type": "vote_error", "model": model_instance, "error": result.error})
+            if degradation:
+                degradation.record_model_unavailable(model_instance, result.error or "unknown_error")
+            if adaptive_timeout:
+                adaptive_timeout.record_latency(base_model, result.latency_ms, success=False)
             continue
+
+        # Record successful latency for adaptive timeout
+        if adaptive_timeout:
+            adaptive_timeout.record_latency(base_model, result.latency_ms, success=True)
 
         try:
             vote_data = get_parsed_json(result)
@@ -1653,6 +1979,16 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
 
         except Exception as e:
             emit({"type": "vote_parse_error", "model": model_instance, "error": str(e)})
+
+    # Emit degradation status if any models failed
+    if degradation and degradation.level != DegradationLevel.FULL:
+        emit({
+            "type": "degradation_status",
+            "level": degradation.level,
+            "available_models": list(degradation.available_models),
+            "failed_models": degradation.failed_models,
+            "stage": "vote_collection"
+        })
 
     return ballots
 
@@ -1760,6 +2096,9 @@ async def run_vote_council(config: SessionConfig) -> dict:
     # Initialize observability metrics
     metrics = init_metrics(session_id)
 
+    # Initialize graceful degradation tracking
+    degradation, adaptive_timeout = init_degradation(config.models, config.timeout)
+
     emit({"type": "status", "stage": 0, "msg": f"Starting vote session {session_id}"})
 
     # Stage 1: Collect votes in parallel
@@ -1863,6 +2202,13 @@ async def run_vote_council(config: SessionConfig) -> dict:
 
     duration_ms = int((time.time() - start_time) * 1000)
 
+    # Get degradation state for final output
+    degradation_summary = degradation.get_summary() if degradation else None
+
+    # Adjust confidence based on degradation
+    raw_confidence = synthesis.get('confidence', margin / 100)
+    adjusted_confidence = degradation.adjust_confidence(raw_confidence) if degradation else raw_confidence
+
     # Build vote result
     vote_result = VoteResult(
         winning_option=winner,
@@ -1879,6 +2225,14 @@ async def run_vote_council(config: SessionConfig) -> dict:
     # Emit metrics summary
     metrics.emit_summary()
 
+    # Emit degradation event if operating degraded
+    if degradation and degradation.level != DegradationLevel.FULL:
+        metrics.emit_event('PartialResultReturned', {
+            'degradation_level': degradation.level,
+            'mode': 'vote',
+            'failed_models': degradation.failed_models
+        })
+
     # Final output
     emit({
         "type": "final",
@@ -1886,7 +2240,9 @@ async def run_vote_council(config: SessionConfig) -> dict:
         "winner": winner,
         "margin": round(margin, 1),
         "answer": synthesis.get('final_answer', ''),
-        "confidence": synthesis.get('confidence', margin / 100),
+        "confidence": adjusted_confidence,
+        "raw_confidence": raw_confidence,
+        "degradation_level": degradation.level if degradation else DegradationLevel.FULL,
         "recommendation_strength": synthesis.get('recommendation_strength', 'moderate'),
         "total_votes": len(ballots)
     })
@@ -1896,7 +2252,8 @@ async def run_vote_council(config: SessionConfig) -> dict:
         "session_id": session_id,
         "duration_ms": duration_ms,
         "models_voted": [b.model for b in ballots],
-        "mode": "vote"
+        "mode": "vote",
+        "degradation": degradation_summary
     })
 
     return {
@@ -1905,6 +2262,9 @@ async def run_vote_council(config: SessionConfig) -> dict:
         "vote_result": asdict(vote_result),
         "synthesis": synthesis,
         "duration_ms": duration_ms,
+        "confidence": adjusted_confidence,
+        "raw_confidence": raw_confidence,
+        "degradation": degradation_summary,
         "metrics": metrics.get_summary()
     }
 
