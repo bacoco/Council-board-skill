@@ -315,6 +315,107 @@ python3 tests/test_security.py
 
 Tests verify protection against 22+ attack vectors across 6 categories.
 
+## Graceful Degradation
+
+The Council skill continues operating when models fail, automatically adjusting confidence and tracking degradation state.
+
+### Degradation Levels
+
+| Level | Condition | Confidence Penalty | Can Continue? |
+|-------|-----------|-------------------|---------------|
+| **FULL** | All requested models available | 0% | Yes |
+| **DEGRADED** | Some models failed, ≥2 remaining | 10% | Yes |
+| **MINIMAL** | <2 models available (below quorum) | 25% | No |
+
+### How It Works
+
+1. **Model Tracking**: Each session tracks expected vs available models
+2. **Failure Recording**: When a model times out, errors, or has circuit breaker open, it's marked unavailable
+3. **Confidence Adjustment**: Final confidence is reduced based on degradation level
+4. **Recovery Detection**: If a model recovers mid-session, it's re-included
+
+### Confidence Adjustment Example
+
+```
+Raw confidence from synthesis: 0.90
+
+FULL mode:     0.90 × 1.00 = 0.90 (no penalty)
+DEGRADED mode: 0.90 × 0.90 = 0.81 (10% penalty)
+MINIMAL mode:  0.90 × 0.75 = 0.675 (25% penalty)
+```
+
+### Adaptive Timeout
+
+The system learns from model response times and adjusts timeouts dynamically:
+
+- **Initial**: Uses configured timeout (default: 60s)
+- **After 3+ samples**: Calculates p95 latency × 1.5 safety margin
+- **Bounds**: Never below 50% or above 200% of base timeout
+
+Example:
+```
+Model: claude
+Observed latencies: [2000ms, 2500ms, 3000ms, 2200ms]
+P95 latency: ~3000ms
+Adaptive timeout: 3000ms × 1.5 / 1000 = 4.5s → clamped to 30s (50% of 60s base)
+```
+
+### Circuit Breaker Integration
+
+Models with open circuit breakers are automatically excluded:
+
+1. **CLOSED** (normal): Model is called normally
+2. **OPEN** (failing): Model skipped, recorded as unavailable
+3. **HALF_OPEN** (testing): Model included, success closes circuit
+
+### Observable Events
+
+Degradation emits structured events for monitoring:
+
+```json
+{"type": "model_degraded", "model": "gemini", "reason": "TIMEOUT", "level": "degraded"}
+{"type": "model_recovered", "model": "gemini", "level": "full"}
+{"type": "degradation_status", "level": "degraded", "available_models": ["claude", "codex"]}
+{"type": "PartialResultReturned", "degradation_level": "degraded", "raw_confidence": 0.9, "adjusted_confidence": 0.81}
+```
+
+### Output Fields
+
+Final output includes degradation information:
+
+```json
+{
+  "confidence": 0.81,
+  "raw_confidence": 0.90,
+  "degradation": {
+    "level": "degraded",
+    "expected_models": ["claude", "gemini", "codex"],
+    "available_models": ["claude", "codex"],
+    "failed_models": {"gemini": "TIMEOUT"},
+    "recovered_models": [],
+    "availability_ratio": 0.667
+  },
+  "adaptive_timeout": {
+    "claude": {"samples": 4, "avg_ms": 2425, "adaptive_timeout_s": 30}
+  }
+}
+```
+
+### Response Format with Degradation
+
+When operating in degraded mode, indicate this to the user:
+
+```markdown
+## Council Deliberation: [Question]
+
+**Participants**: Chief Architect (Claude), ~~Security Officer (Gemini)~~, Performance Engineer (Codex)
+**Status**: DEGRADED (1 model unavailable)
+**Confidence**: 0.81 (adjusted from 0.90 due to degradation)
+
+⚠️ **Note**: Security Officer (Gemini) was unavailable due to timeout.
+Results are based on 2 of 3 requested perspectives.
+```
+
 ## Error Handling
 
 - **CLI timeout** (>60s): Mark as ABSTENTION, continue with available responses
