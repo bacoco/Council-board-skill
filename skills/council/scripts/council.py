@@ -55,6 +55,148 @@ PERSONA_MANAGER = PersonaManager()
 INPUT_VALIDATOR = InputValidator()
 
 # ============================================================================
+# Circuit Breaker Pattern
+# ============================================================================
+
+class CircuitBreaker:
+    """
+    Circuit breaker for model failure handling.
+
+    Prevents cascading failures by temporarily excluding models that fail repeatedly.
+    States: CLOSED (normal) -> OPEN (failing, excluded) -> HALF_OPEN (testing recovery)
+
+    Usage:
+        breaker = CircuitBreaker()
+        if breaker.can_call("claude"):
+            result = call_model(...)
+            if result.success:
+                breaker.record_success("claude")
+            else:
+                breaker.record_failure("claude")
+    """
+
+    # Circuit breaker configuration
+    FAILURE_THRESHOLD = 3      # Failures before opening circuit
+    RECOVERY_TIMEOUT = 60      # Seconds before trying again (HALF_OPEN)
+    SUCCESS_THRESHOLD = 2      # Successes in HALF_OPEN to close circuit
+
+    def __init__(self):
+        self._failures = {}      # model -> failure count
+        self._successes = {}     # model -> success count in half-open
+        self._state = {}         # model -> 'closed' | 'open' | 'half_open'
+        self._last_failure = {}  # model -> timestamp of last failure
+        self._total_calls = {}   # model -> total call count (for metrics)
+        self._total_failures = {}  # model -> total failure count (for metrics)
+
+    def _get_state(self, model: str) -> str:
+        """Get current state for a model, checking for recovery timeout."""
+        state = self._state.get(model, 'closed')
+
+        if state == 'open':
+            # Check if recovery timeout has passed
+            last_fail = self._last_failure.get(model, 0)
+            if time.time() - last_fail >= self.RECOVERY_TIMEOUT:
+                self._state[model] = 'half_open'
+                self._successes[model] = 0
+                return 'half_open'
+
+        return state
+
+    def can_call(self, model: str) -> bool:
+        """Check if a model can be called (circuit not open)."""
+        state = self._get_state(model)
+        return state != 'open'
+
+    def record_success(self, model: str):
+        """Record a successful call to a model."""
+        self._total_calls[model] = self._total_calls.get(model, 0) + 1
+        state = self._get_state(model)
+
+        if state == 'half_open':
+            self._successes[model] = self._successes.get(model, 0) + 1
+            if self._successes[model] >= self.SUCCESS_THRESHOLD:
+                # Close the circuit - model recovered
+                self._state[model] = 'closed'
+                self._failures[model] = 0
+                emit({
+                    "type": "circuit_breaker",
+                    "model": model,
+                    "event": "closed",
+                    "msg": f"Circuit closed for {model} - model recovered"
+                })
+        elif state == 'closed':
+            # Reset failure count on success
+            self._failures[model] = 0
+
+    def record_failure(self, model: str, error: str = None):
+        """Record a failed call to a model."""
+        self._total_calls[model] = self._total_calls.get(model, 0) + 1
+        self._total_failures[model] = self._total_failures.get(model, 0) + 1
+        self._last_failure[model] = time.time()
+
+        state = self._get_state(model)
+
+        if state == 'half_open':
+            # Failure during recovery - reopen circuit
+            self._state[model] = 'open'
+            emit({
+                "type": "circuit_breaker",
+                "model": model,
+                "event": "reopened",
+                "msg": f"Circuit reopened for {model} - failed during recovery",
+                "error": error
+            })
+        elif state == 'closed':
+            self._failures[model] = self._failures.get(model, 0) + 1
+            if self._failures[model] >= self.FAILURE_THRESHOLD:
+                # Open the circuit
+                self._state[model] = 'open'
+                emit({
+                    "type": "circuit_breaker",
+                    "model": model,
+                    "event": "opened",
+                    "msg": f"Circuit opened for {model} - {self._failures[model]} consecutive failures",
+                    "error": error
+                })
+
+    def get_available_models(self, models: List[str]) -> List[str]:
+        """Filter models to only those with closed or half-open circuits."""
+        return [m for m in models if self.can_call(m)]
+
+    def get_status(self) -> dict:
+        """Get circuit breaker status for all tracked models."""
+        status = {}
+        for model in set(self._state.keys()) | set(self._failures.keys()):
+            status[model] = {
+                "state": self._get_state(model),
+                "failures": self._failures.get(model, 0),
+                "total_calls": self._total_calls.get(model, 0),
+                "total_failures": self._total_failures.get(model, 0),
+                "failure_rate": (
+                    self._total_failures.get(model, 0) / self._total_calls.get(model, 1)
+                    if self._total_calls.get(model, 0) > 0 else 0
+                )
+            }
+        return status
+
+    def reset(self, model: str = None):
+        """Reset circuit breaker state for a model or all models."""
+        if model:
+            self._failures.pop(model, None)
+            self._successes.pop(model, None)
+            self._state.pop(model, None)
+            self._last_failure.pop(model, None)
+        else:
+            self._failures.clear()
+            self._successes.clear()
+            self._state.clear()
+            self._last_failure.clear()
+
+
+# Global circuit breaker instance
+CIRCUIT_BREAKER = CircuitBreaker()
+
+# ============================================================================
 # Data Classes
 # ============================================================================
 
@@ -317,7 +459,7 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
 
 async def query_cli_with_retry(model_name: str, cli_config: CLIConfig, prompt: str, timeout: int, max_retries: int = 3) -> LLMResponse:
     """
-    Query CLI with exponential backoff retry logic for transient failures.
+    Query CLI with exponential backoff retry logic and circuit breaker protection.
 
     Args:
         model_name: Name of the model
@@ -329,13 +471,24 @@ async def query_cli_with_retry(model_name: str, cli_config: CLIConfig, prompt: s
     Returns:
         LLMResponse with content, latency, and success status
     """
+    # Check circuit breaker before calling
+    if not CIRCUIT_BREAKER.can_call(model_name):
+        return LLMResponse(
+            content='',
+            model=model_name,
+            latency_ms=0,
+            success=False,
+            error=f'Circuit breaker OPEN for {model_name} - model temporarily excluded due to repeated failures'
+        )
+
     last_error = None
 
     for attempt in range(max_retries):
         result = await query_cli(model_name, cli_config, prompt, timeout)
 
-        # Success - return immediately
+        # Success - record and return immediately
         if result.success:
+            CIRCUIT_BREAKER.record_success(model_name)
             if attempt > 0:
                 emit_perf_metric("query_retry_success", 0, model=model_name, attempt=attempt + 1)
             return result
@@ -349,7 +502,8 @@ async def query_cli_with_retry(model_name: str, cli_config: CLIConfig, prompt: s
             emit_perf_metric("query_retry_backoff", backoff * 1000, model=model_name, attempt=attempt + 1)
             await asyncio.sleep(backoff)
 
-    # All retries exhausted - return last failed response
+    # All retries exhausted - record failure and return
+    CIRCUIT_BREAKER.record_failure(model_name, last_error)
     emit_perf_metric("query_retry_exhausted", 0, model=model_name, retries=max_retries)
     return LLMResponse(
         content='',
@@ -770,12 +924,13 @@ async def generate_personas_with_llm(query: str, num_models: int, chairman: str,
         List of dynamically generated Persona objects
     """
     # Mode-specific instructions for persona generation (HYBRID: creative titles + grounded roles)
+    # NOTE: Specialist mode was evaluated by the Council and voted down (3-0) as premature optimization.
+    #       Modern LLMs handle cross-domain queries well; routing adds complexity without proven benefit.
     mode_instructions = {
         'consensus': 'Create 3 complementary experts with DIFFERENT technical angles on this problem.',
         'debate': 'Create adversarial experts: one CHAMPION (argues FOR), one SKEPTIC (argues AGAINST), one ARBITER (neutral analysis).',
         'devil_advocate': 'Create red/blue/purple team: ATTACKER (finds flaws), DEFENDER (justifies approach), SYNTHESIZER (integrates both).',
         'vote': 'Create domain experts who will each cast a vote with technical justification.',
-        'specialist': 'Create hyper-specialized experts for this exact problem domain.'
     }
 
     mode_instruction = mode_instructions.get(mode, mode_instructions['consensus'])
@@ -1109,6 +1264,9 @@ async def run_council(config: SessionConfig) -> dict:
         "convergence_score": round(convergence_score, 3)
     })
 
+    # Get circuit breaker status for transparency
+    cb_status = CIRCUIT_BREAKER.get_status()
+
     emit({
         "type": "meta",
         "session_id": session_id,
@@ -1116,7 +1274,8 @@ async def run_council(config: SessionConfig) -> dict:
         "models_responded": list(final_opinions.keys()),
         "mode": config.mode,
         "rounds": len(all_rounds),
-        "converged": converged
+        "converged": converged,
+        "circuit_breaker": cb_status if cb_status else None
     })
 
     return {
@@ -1129,7 +1288,8 @@ async def run_council(config: SessionConfig) -> dict:
         "duration_ms": duration_ms,
         "rounds_completed": len(all_rounds),
         "converged": converged,
-        "convergence_score": convergence_score
+        "convergence_score": convergence_score,
+        "circuit_breaker_status": cb_status
     }
 
 # ============================================================================
@@ -1671,7 +1831,7 @@ def main():
     parser.add_argument('--query', '-q', required=True, help='Question to deliberate')
     parser.add_argument('--context', '-c', help='Code or additional context for analysis (optional)')
     parser.add_argument('--mode', '-m', default='adaptive',
-                       choices=['adaptive', 'consensus', 'debate', 'vote', 'specialist', 'devil_advocate'])
+                       choices=['adaptive', 'consensus', 'debate', 'vote', 'devil_advocate'])
     parser.add_argument('--models', default='claude,gemini,codex', help='Comma-separated model list')
     parser.add_argument('--chairman', default='claude', help='Synthesizer model')
     parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT, help='Per-model timeout (seconds)')
