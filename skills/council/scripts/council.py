@@ -2427,6 +2427,7 @@ def main():
     parser = argparse.ArgumentParser(description='LLM Council - Multi-model deliberation')
     parser.add_argument('--query', '-q', required=True, help='Question to deliberate')
     parser.add_argument('--context', '-c', help='Code or additional context for analysis (optional)')
+    parser.add_argument('--context-file', '-f', help='Path to file containing context (code, docs, etc.)')
     parser.add_argument('--mode', '-m', default='adaptive',
                        choices=['adaptive', 'consensus', 'debate', 'vote', 'devil_advocate'])
     parser.add_argument('--models', default='claude,gemini,codex', help='Comma-separated model list')
@@ -2440,12 +2441,65 @@ def main():
     args = parser.parse_args()
 
     # ============================================================================
+    # Context Loading: File or inline
+    # ============================================================================
+
+    context = args.context or ''
+
+    # Load context from manifest file if specified
+    if args.context_file:
+        context_path = Path(args.context_file)
+        if context_path.exists():
+            try:
+                manifest_content = context_path.read_text(encoding='utf-8')
+
+                # Parse manifest for file paths (lines starting with ### followed by a path)
+                file_pattern = re.compile(r'^###\s+(\S+\.(?:py|ts|js|tsx|jsx|go|rs|java|md|json|yaml|yml|toml))\s*$', re.MULTILINE)
+                file_paths = file_pattern.findall(manifest_content)
+
+                # Build context from manifest + loaded files
+                context_parts = [manifest_content]
+
+                if file_paths:
+                    context_parts.append("\n\n# === LOADED FILES ===\n")
+                    files_loaded = []
+
+                    for file_path in file_paths:
+                        fp = Path(file_path)
+                        if fp.exists():
+                            try:
+                                content = fp.read_text(encoding='utf-8')
+                                context_parts.append(f"\n## File: {file_path}\n```\n{content}\n```\n")
+                                files_loaded.append(file_path)
+                            except Exception as e:
+                                context_parts.append(f"\n## File: {file_path}\n[Error reading: {e}]\n")
+                        else:
+                            context_parts.append(f"\n## File: {file_path}\n[File not found]\n")
+
+                    emit({'type': 'context_loaded', 'manifest': str(context_path), 'files_loaded': files_loaded})
+                else:
+                    # No file paths found, just use manifest as context
+                    emit({'type': 'context_loaded', 'manifest': str(context_path), 'files_loaded': []})
+
+                # Combine all parts
+                loaded_context = ''.join(context_parts)
+                if context:
+                    context = f"{context}\n\n{loaded_context}"
+                else:
+                    context = loaded_context
+
+            except Exception as e:
+                emit({'type': 'context_error', 'file': str(context_path), 'error': str(e)})
+        else:
+            emit({'type': 'context_error', 'file': str(context_path), 'error': 'Manifest file not found'})
+
+    # ============================================================================
     # SECURITY: Input Validation and Sanitization
     # ============================================================================
 
     validation = validate_and_sanitize(
         query=args.query,
-        context=args.context,
+        context=context,  # Use loaded context
         max_rounds=args.max_rounds,
         timeout=args.timeout,
         strict=False  # Sanitize and continue (strict=True would fail on violations)

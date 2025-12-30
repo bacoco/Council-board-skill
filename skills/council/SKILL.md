@@ -36,11 +36,58 @@ When user triggers council (e.g., "ask the council: Should we use TypeScript?"):
 
 ### Invocation
 
-**IMPORTANT**: If user's question references code, files, or specific implementations:
-1. Use Read tool to get the code/files FIRST
-2. Pass code as --context argument to provide full context to all models
+**CRITICAL - Context Preparation**: The 3 models (Claude, Gemini, Codex) can ONLY see what you provide them. They cannot read files themselves. YOU must gather all relevant context BEFORE calling the council.
 
-**Basic invocation** (no code context):
+#### Step 1: Prepare Context Manifest
+
+When user's question involves code, architecture, or specific files, create a **manifest file** that lists the files to analyze. Council.py will read these files automatically.
+
+```bash
+# Create a manifest file listing relevant files
+Write /tmp/council_manifest.md
+```
+
+**Manifest format** (council.py loads files marked with `### path/to/file.ext`):
+```markdown
+# Council Context
+
+## Question
+Review the authentication module for security issues
+
+## Files to Analyze
+
+### src/auth.py
+- **Role**: Main authentication module
+- **Why**: This is the code to review
+
+### src/config.py
+- **Role**: JWT configuration and secrets
+- **Why**: Related to auth security
+
+### tests/test_auth.py
+- **Role**: Unit tests
+- **Why**: Check test coverage
+
+## Additional Context
+- Project uses FastAPI
+- Authentication via JWT tokens
+- Redis for session storage
+```
+
+**How it works**: Council.py parses lines starting with `### filename.ext` and loads those files automatically. The descriptions help models understand each file's purpose.
+
+#### Step 2: Invoke Council
+
+**With context file** (recommended for code reviews):
+```bash
+python3 ${SKILL_ROOT}/scripts/council.py \
+  --query "[user's question]" \
+  --context-file /tmp/council_context.md \
+  --mode consensus \
+  --max-rounds 3
+```
+
+**Basic invocation** (simple questions without code):
 ```bash
 python3 ${SKILL_ROOT}/scripts/council.py \
   --query "[user's question]" \
@@ -48,29 +95,47 @@ python3 ${SKILL_ROOT}/scripts/council.py \
   --max-rounds 3
 ```
 
-**With code context** (when user references code):
+**With inline context** (small snippets):
 ```bash
-# First read the relevant code
-Read file_path
-
-# Then invoke council with context
 python3 ${SKILL_ROOT}/scripts/council.py \
   --query "[user's question]" \
-  --context "[code content from Read tool]" \
-  --mode consensus \
-  --max-rounds 3
+  --context "[short code snippet]" \
+  --mode consensus
 ```
 
-**Example - Code review**:
+#### Example - Complete Code Review Flow
+
 ```
-User: "Ask the council: Is this authentication function secure?"
-      [shows code snippet or references a file]
+User: "Ask the council to review the authentication module"
 
 You should:
-1. Read the file if referenced, OR use the code snippet from conversation
-2. Call council with --context containing the code
-3. Models will analyze the code from all 3 perspectives
+1. Create manifest file:
+   Write /tmp/council_manifest.md with:
+
+   # Council Context
+   ## Question
+   Review auth module for security, architecture, performance
+
+   ## Files to Analyze
+   ### src/auth.py
+   - Main authentication logic
+
+   ### src/config.py
+   - Configuration and secrets
+
+   ### tests/test_auth.py
+   - Test coverage
+
+2. Call council (it will load the files automatically):
+   python3 ${SKILL_ROOT}/scripts/council.py \
+     --query "Review this authentication module" \
+     --context-file /tmp/council_manifest.md \
+     --mode consensus
+
+3. Present results to user
 ```
+
+**Why this matters**: All 3 models receive the SAME loaded files. They analyze independently, then see each other's anonymized responses in round 2+. Without proper context, they're "blind" and can only give generic advice.
 
 ### Multi-Round Deliberation Process
 
