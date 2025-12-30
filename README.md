@@ -4,6 +4,36 @@
 
 Council orchestrates Claude, Gemini, and Codex to debate, challenge, and synthesize answers together. Three perspectives. One synthesis.
 
+---
+
+### 🎯 Collective Intelligence, Amplified.
+
+> You code alone. You decide alone. You doubt alone.
+> **What if three AI minds deliberated before you commit?**
+
+**Three models. Dynamic personas. One clear answer.**
+
+**For Developers:**
+- Pressure-test architecture, APIs, and stack decisions in minutes
+- Devil's Advocate mode exposes blind spots before your PR does
+- Anonymous peer review: candid critique, ego intact
+
+**For Decision Makers:**
+- Consensus detected = instant green light
+- Full audit trail: every decision justified and shareable
+- 2-hour debates become 10-minute decisions
+
+*Debate mode stress-tests. Consensus mode synthesizes.*
+*Personas adapt dynamically to your specific query—no scripting, no setup.*
+
+**Doubt drags. Collective clarity ships.**
+
+```bash
+/council "Microservices or monolith?"  # → Clear verdict in ~2 min
+```
+
+---
+
 ## Inspired By
 
 > *"LLM Council works together to answer your hardest questions"*
