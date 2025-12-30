@@ -2055,16 +2055,13 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
                     confidence = 0.0
                     key_points = []
 
-                # Truncate answer to 300 chars for readability
-                short_answer = answer[:300] + "..." if len(answer) > 300 else answer
-
                 trail_entry = {
                     "round": round_num,
                     "model": model,
                     "persona": persona.title if persona else model,
                     "persona_role": persona.role if persona else None,
-                    "answer": short_answer,
-                    "key_points": key_points[:3] if key_points else None,  # Max 3 points
+                    "answer": answer,
+                    "key_points": key_points if key_points else None,
                     "confidence": confidence,
                     "latency_ms": response.latency_ms
                 }
