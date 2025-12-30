@@ -367,62 +367,105 @@ class AdaptiveTimeout:
     MAX_TIMEOUT_FACTOR = 2.0   # Never exceed 200% of base
     SAFETY_MARGIN = 1.5        # Add 50% to observed p95 for safety
     MIN_SAMPLES = 3            # Minimum samples before adapting
+    TIMEOUT_SLOPE = 0.2        # Incremental boost per additional consecutive timeout
+    TIMEOUT_STREAK_CAP = 3     # Cap the streak that contributes to boost
 
     def __init__(self, base_timeout: int = DEFAULT_TIMEOUT):
         self.base_timeout = base_timeout
-        self._latencies = {}  # model -> list of latencies
-        self._timeouts = {}   # model -> list of timeout occurrences
+        self._latencies = {}  # (model, mode) -> list of latencies
+        self._timeouts = {}   # (model, mode) -> count of timeout occurrences
+        self._timeout_streak = {}  # (model, mode) -> consecutive timeout count
 
-    def record_latency(self, model: str, latency_ms: float, success: bool = True):
-        """Record a model call latency."""
+    def _get_key(self, model: str, mode: Optional[str]) -> Tuple[str, str]:
+        """Normalize tracking key to (base_model, mode)."""
         base_model = get_base_model(model) if '_instance_' in model else model
+        return base_model, mode or "default"
 
-        if base_model not in self._latencies:
-            self._latencies[base_model] = []
-            self._timeouts[base_model] = 0
+    def _ensure_entry(self, key: Tuple[str, str]):
+        if key not in self._latencies:
+            self._latencies[key] = []
+            self._timeouts[key] = 0
+            self._timeout_streak[key] = 0
+
+    def record_latency(self, model: str, latency_ms: float, success: bool = True, mode: Optional[str] = None):
+        """Record a model call latency."""
+        key = self._get_key(model, mode)
+        self._ensure_entry(key)
 
         if success:
-            self._latencies[base_model].append(latency_ms)
+            self._latencies[key].append(latency_ms)
             # Keep only last 20 samples for recency bias
-            self._latencies[base_model] = self._latencies[base_model][-20:]
+            self._latencies[key] = self._latencies[key][-20:]
+            self._timeout_streak[key] = 0
         else:
-            self._timeouts[base_model] += 1
+            self._timeouts[key] += 1
+            self._timeout_streak[key] += 1
 
-    def get_timeout(self, model: str) -> int:
-        """Get adaptive timeout for a model."""
-        base_model = get_base_model(model) if '_instance_' in model else model
-        latencies = self._latencies.get(base_model, [])
-
-        if len(latencies) < self.MIN_SAMPLES:
-            # Not enough data - use base timeout
-            return self.base_timeout
-
-        # Calculate p95 latency
+    def _compute_p95(self, latencies: List[float]) -> float:
+        """Compute p95 latency from a list."""
+        if not latencies:
+            return 0
         sorted_latencies = sorted(latencies)
         p95_index = int(len(sorted_latencies) * 0.95)
-        p95_latency = sorted_latencies[min(p95_index, len(sorted_latencies) - 1)]
+        return sorted_latencies[min(p95_index, len(sorted_latencies) - 1)]
 
-        # Apply safety margin and convert to seconds
-        adaptive_timeout = int((p95_latency * self.SAFETY_MARGIN) / 1000)
+    def _get_boost_factor(self, key: Tuple[str, str]) -> float:
+        """Return temporary boost factor based on consecutive timeout streak."""
+        streak = self._timeout_streak.get(key, 0)
+        if streak < 2:
+            return 1.0
 
-        # Clamp to allowed range
+        effective_streak = min(streak - 1, self.TIMEOUT_STREAK_CAP)
+        return 1.0 + (effective_streak * self.TIMEOUT_SLOPE)
+
+    def get_timeout(self, model: str, mode: Optional[str] = None) -> int:
+        """Get adaptive timeout for a model."""
+        key = self._get_key(model, mode)
+        self._ensure_entry(key)
+
+        latencies = self._latencies.get(key, [])
+
+        if len(latencies) < self.MIN_SAMPLES:
+            # Not enough data - use base timeout with any temporary boost
+            base_timeout = self.base_timeout
+        else:
+            # Calculate p95 latency
+            p95_latency = self._compute_p95(latencies)
+
+            # Apply safety margin and convert to seconds
+            base_timeout = int((p95_latency * self.SAFETY_MARGIN) / 1000)
+
+        # Clamp to allowed range before temporary boost
         min_timeout = int(self.base_timeout * self.MIN_TIMEOUT_FACTOR)
         max_timeout = int(self.base_timeout * self.MAX_TIMEOUT_FACTOR)
 
-        return max(min_timeout, min(max_timeout, adaptive_timeout))
+        adaptive_timeout = max(min_timeout, min(max_timeout, base_timeout))
+
+        boosted_timeout = adaptive_timeout * self._get_boost_factor(key)
+
+        return max(min_timeout, min(max_timeout, int(boosted_timeout)))
 
     def get_stats(self) -> dict:
         """Get timeout statistics for all models."""
-        stats = {}
-        for model, latencies in self._latencies.items():
-            if latencies:
-                stats[model] = {
-                    'samples': len(latencies),
-                    'avg_ms': int(sum(latencies) / len(latencies)),
-                    'max_ms': int(max(latencies)),
-                    'adaptive_timeout_s': self.get_timeout(model),
-                    'timeout_count': self._timeouts.get(model, 0)
-                }
+        stats: dict[str, dict[str, dict]] = {}
+        for (model, mode), latencies in self._latencies.items():
+            if not latencies and self._timeouts.get((model, mode), 0) == 0:
+                continue
+
+            p95_latency = self._compute_p95(latencies) if latencies else None
+            mode_label = mode or "default"
+
+            stats.setdefault(model, {})
+            stats[model][mode_label] = {
+                'mode': mode_label,
+                'count': len(latencies),
+                'avg_ms': int(sum(latencies) / len(latencies)) if latencies else None,
+                'max_ms': int(max(latencies)) if latencies else None,
+                'p95_ms': int(p95_latency) if p95_latency is not None else None,
+                'adaptive_timeout_s': self.get_timeout(model, mode),
+                'timeout_count': self._timeouts.get((model, mode), 0),
+                'consecutive_timeouts': self._timeout_streak.get((model, mode), 0)
+            }
         return stats
 
 
@@ -1568,7 +1611,7 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
             # Use adaptive timeout if available, otherwise config timeout
-            model_timeout = adaptive_timeout.get_timeout(base_model) if adaptive_timeout else config.timeout
+            model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode) if adaptive_timeout else config.timeout
             model_timeouts.append(model_timeout)
 
             emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title, "timeout": model_timeout})
@@ -1592,11 +1635,11 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             if degradation:
                 degradation.record_model_unavailable(model_instance, str(result))
             if adaptive_timeout:
-                adaptive_timeout.record_latency(base_model, 0, success=False)
+                adaptive_timeout.record_latency(base_model, 0, success=False, mode=config.mode)
         else:
             # Record latency for adaptive timeout learning
             if adaptive_timeout:
-                adaptive_timeout.record_latency(base_model, result.latency_ms, success=result.success)
+                adaptive_timeout.record_latency(base_model, result.latency_ms, success=result.success, mode=config.mode)
 
             if result.success:
                 emit({"type": "opinion_complete", "model": model_instance, "round": round_num, "latency_ms": result.latency_ms})
@@ -2007,7 +2050,7 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
         persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
         # Use adaptive timeout if available
-        model_timeout = adaptive_timeout.get_timeout(base_model) if adaptive_timeout else config.timeout
+        model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode) if adaptive_timeout else config.timeout
 
         emit({"type": "vote_start", "model": model_instance, "persona": persona_title, "timeout": model_timeout})
 
@@ -2035,7 +2078,7 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
             if degradation:
                 degradation.record_model_unavailable(model_instance, str(result))
             if adaptive_timeout:
-                adaptive_timeout.record_latency(base_model, 0, success=False)
+                adaptive_timeout.record_latency(base_model, 0, success=False, mode=config.mode)
             continue
 
         if not result.success:
@@ -2043,12 +2086,12 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
             if degradation:
                 degradation.record_model_unavailable(model_instance, result.error or "unknown_error")
             if adaptive_timeout:
-                adaptive_timeout.record_latency(base_model, result.latency_ms, success=False)
+                adaptive_timeout.record_latency(base_model, result.latency_ms, success=False, mode=config.mode)
             continue
 
         # Record successful latency for adaptive timeout
         if adaptive_timeout:
-            adaptive_timeout.record_latency(base_model, result.latency_ms, success=True)
+            adaptive_timeout.record_latency(base_model, result.latency_ms, success=True, mode=config.mode)
 
         try:
             vote_data = get_parsed_json(result)
@@ -2335,6 +2378,9 @@ async def run_vote_council(config: SessionConfig) -> dict:
             'failed_models': degradation.failed_models
         })
 
+    # Gather adaptive timeout stats for transparency
+    timeout_stats = adaptive_timeout.get_stats() if adaptive_timeout else None
+
     # Final output
     emit({
         "type": "final",
@@ -2355,7 +2401,8 @@ async def run_vote_council(config: SessionConfig) -> dict:
         "duration_ms": duration_ms,
         "models_voted": [b.model for b in ballots],
         "mode": "vote",
-        "degradation": degradation_summary
+        "degradation": degradation_summary,
+        "adaptive_timeout": timeout_stats
     })
 
     return {
@@ -2367,6 +2414,7 @@ async def run_vote_council(config: SessionConfig) -> dict:
         "confidence": adjusted_confidence,
         "raw_confidence": raw_confidence,
         "degradation": degradation_summary,
+        "adaptive_timeout_stats": timeout_stats,
         "metrics": metrics.get_summary()
     }
 
