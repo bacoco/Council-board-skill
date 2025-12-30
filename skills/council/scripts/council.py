@@ -1138,11 +1138,12 @@ The user has provided the following code or implementation for analysis:
 
     # Add previous round context if this is a rebuttal round
     previous_context_block = ""
-    if round_num > 1 and previous_context:
+    if previous_context:
         action_verb = "rebuttals" if mode == 'debate' else "counter-arguments" if mode == 'devil_advocate' else "rebuttals"
+        round_label = f"Round {round_num - 1}" if round_num > 1 else "Prior context"
         previous_context_block = f"""
 <previous_round>
-Round {round_num - 1} - What other participants said:
+{round_label} - What other participants said:
 {previous_context}
 
 Consider their arguments. Provide {action_verb}, concessions, or refinements based on your role.
@@ -1197,7 +1198,7 @@ Score each response. Respond ONLY with JSON:
 "notes": "Brief summary"}}
 </instructions>"""
 
-def build_synthesis_prompt(query: str, responses: dict, scores: dict, conflicts: list, all_rounds: list = None) -> str:
+def build_synthesis_prompt(query: str, responses: dict, scores: dict, conflicts: list, all_rounds: list = None, devils_summary: dict = None) -> str:
     # Include all rounds for final synthesis
     rounds_context = ""
     if all_rounds:
@@ -1205,6 +1206,16 @@ def build_synthesis_prompt(query: str, responses: dict, scores: dict, conflicts:
         for i, round_data in enumerate(all_rounds, 1):
             rounds_context += f"Round {i}:\n{json.dumps(round_data, indent=2)}\n"
         rounds_context += "</all_rounds>\n"
+
+    devils_context = ""
+    if devils_summary:
+        devils_context = f"""
+<devils_advocate_arguments>
+{json.dumps(devils_summary, indent=2)}
+</devils_advocate_arguments>
+"""
+
+    devils_arguments_placeholder = json.dumps(devils_summary) if devils_summary else '{"attacker": [], "defender": [], "synthesizer": [], "unassigned": []}'
 
     return f"""<s>You are Chairman. Synthesize council input from all deliberation rounds.</s>
 
@@ -1218,12 +1229,18 @@ Scores: {json.dumps(scores)}
 Conflicts: {json.dumps(conflicts)}
 </peer_review>
 
+{devils_context}
 <instructions>
 Resolve contradictions OR present alternatives. Respond with JSON:
 {{"final_answer": "Your synthesized answer incorporating all rounds",
 "contradiction_resolutions": [],
 "remaining_uncertainties": [],
+"agreement_points": [],
+"critical_dissent": [],
+"action_recommendations": [],
+"action_plan": {{"agreements": [], "critical_dissent": [], "recommendations": []}},
 "confidence": 0.85,
+"devils_advocate_arguments": {devils_arguments_placeholder},
 "dissenting_view": null,
 "rounds_analyzed": {len(all_rounds) if all_rounds else 1}}}
 </instructions>"""
@@ -1612,7 +1629,7 @@ JSON array only, start with [ and end with ]:"""
     cache_bucket[cache_key] = personas
     return personas
 
-async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None) -> dict[str, LLMResponse]:
+async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None, include_personas: bool = False) -> dict[str, LLMResponse] | tuple[dict[str, LLMResponse], dict[str, Persona]]:
     """Gather opinions from all available models in parallel with graceful degradation."""
     emit({"type": "status", "stage": 1, "msg": f"Collecting opinions (Round {round_num}, Mode: {config.mode})..."})
 
@@ -1633,6 +1650,7 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
     available_models = []
     model_timeouts = []  # Track timeout per model for adaptive timeout
     model_index = 0
+    persona_map: dict[str, Persona] = {}
 
     for model_instance in config.models:
         # Extract base model from instance ID (e.g., 'claude_instance_1' -> 'claude')
@@ -1652,10 +1670,11 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             dynamic_persona = None
             if assigned_personas and model_index < len(assigned_personas):
                 dynamic_persona = assigned_personas[model_index]
+                persona_map[model_instance] = dynamic_persona
 
             # Build context from previous round (what OTHER models said)
             previous_context = None
-            if round_num > 1 and previous_round_opinions:
+            if previous_round_opinions:
                 previous_context = build_context_from_previous_rounds(model_instance, previous_round_opinions, config.anonymize, config.mode)
 
             # Build prompt with persona, previous context, and code context
@@ -1724,7 +1743,91 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             "round": round_num
         })
 
+    if include_personas:
+        return responses, persona_map
+
     return responses
+
+def infer_devils_team(persona: Persona | None) -> str:
+    """Infer devil's advocate team based on persona metadata."""
+    if not persona:
+        return "unassigned"
+
+    text = f"{persona.title} {persona.role}".lower()
+    if any(keyword in text for keyword in ("attack", "red team", "attacker")):
+        return "attacker"
+    if any(keyword in text for keyword in ("defend", "defender", "blue team")):
+        return "defender"
+    if "synth" in text or "purple" in text or "integrat" in text:
+        return "synthesizer"
+    return "unassigned"
+
+def fallback_devils_summary(opinions: dict[str, str], persona_map: dict[str, Persona]) -> dict:
+    """Build a lightweight summary of devil's advocate arguments without extra LLM calls."""
+    summary = {"attacker": [], "defender": [], "synthesizer": [], "unassigned": []}
+    for model, opinion in opinions.items():
+        persona = persona_map.get(model)
+        team = infer_devils_team(persona)
+        try:
+            parsed = extract_json(opinion)
+            key_points = parsed.get('key_points') or []
+            answer = parsed.get('answer')
+            collected = key_points if key_points else [answer] if answer else []
+            summary[team].extend([str(point) for point in collected if point])
+        except Exception:
+            summary[team].append(opinion)
+    return summary
+
+async def summarize_devils_advocate_arguments(query: str, opinions: dict[str, str], persona_map: dict[str, Persona], chairman: str, timeout: int) -> dict:
+    """Summarize key devil's advocate arguments by team (attacker/defender/synthesizer)."""
+    if not opinions:
+        return {}
+
+    persona_lines = []
+    for model, persona in persona_map.items():
+        team_hint = infer_devils_team(persona)
+        persona_lines.append(f"- {model}: {persona.title} ({persona.role}) | inferred_team: {team_hint}")
+
+    prompt = f"""<s>Summarize a devil's advocate mini-cycle.</s>
+
+<question>{query}</question>
+
+<participants>
+{chr(10).join(persona_lines)}
+</participants>
+
+<round_arguments>
+{json.dumps(opinions, indent=2)}
+</round_arguments>
+
+<instructions>
+Group the major arguments by team.
+Return ONLY JSON:
+{{"attacker": ["key critiques"], "defender": ["defenses"], "synthesizer": ["integrations or meta points"], "unassigned": [], "headline_takeaways": ["2-3 bullet summary"]}}
+</instructions>"""
+
+    actual_chairman = get_chairman_with_fallback(chairman)
+    metrics = get_metrics()
+    start = time.time()
+
+    if actual_chairman in ADAPTERS:
+        result = await ADAPTERS[actual_chairman](prompt, timeout)
+        if metrics:
+            metrics.record_latency('devils_advocate_summary', int((time.time() - start) * 1000))
+        if result.success:
+            try:
+                parsed = get_parsed_json(result)
+                # Ensure expected keys exist
+                for key in ("attacker", "defender", "synthesizer", "unassigned", "headline_takeaways"):
+                    parsed.setdefault(key, [])
+                return parsed
+            except Exception:
+                emit({"type": "devils_advocate_summary_parse_error", "error": "Failed to parse chairman summary"})
+
+    # Fallback to deterministic summary
+    fallback = fallback_devils_summary(opinions, persona_map)
+    fallback["headline_takeaways"] = []
+    return fallback
 
 async def peer_review(config: SessionConfig, opinions: dict[str, str]) -> dict:
     emit({"type": "status", "stage": 2, "msg": "Peer review in progress..."})
@@ -1753,7 +1856,7 @@ async def peer_review(config: SessionConfig, opinions: dict[str, str]) -> dict:
 def extract_contradictions(review: dict) -> list[str]:
     return review.get('key_conflicts', [])
 
-async def synthesize(config: SessionConfig, opinions: dict, review: dict, conflicts: list, all_rounds: list = None) -> dict:
+async def synthesize(config: SessionConfig, opinions: dict, review: dict, conflicts: list, all_rounds: list = None, devils_advocate_summary: dict = None) -> dict:
     # Use chairman with failover chain (Council recommendation #1)
     actual_chairman = get_chairman_with_fallback(config.chairman)
     emit({"type": "status", "stage": 3, "msg": f"Chairman ({actual_chairman}) synthesizing..."})
@@ -1763,7 +1866,8 @@ async def synthesize(config: SessionConfig, opinions: dict, review: dict, confli
         opinions,
         review.get('scores', {}),
         conflicts,
-        all_rounds=all_rounds
+        all_rounds=all_rounds,
+        devils_summary=devils_advocate_summary
     )
 
     if actual_chairman in ADAPTERS:
@@ -1844,7 +1948,7 @@ Produce final meta-synthesis as JSON:
 
     return {"final_answer": "Meta-synthesis failed", "confidence": 0.0}
 
-async def run_council(config: SessionConfig) -> dict:
+async def run_council(config: SessionConfig, escalation_allowed: bool = True) -> dict:
     session_id = f"council-{int(time.time())}"
     start_time = time.time()
 
@@ -1861,6 +1965,8 @@ async def run_council(config: SessionConfig) -> dict:
     previous_round_opinions = None
     converged = False
     convergence_score = 0.0
+    devils_advocate_round = None
+    devils_advocate_summary = None
 
     # Multi-round deliberation loop
     for round_num in range(1, config.max_rounds + 1):
@@ -1913,6 +2019,60 @@ async def run_council(config: SessionConfig) -> dict:
         metrics.record_round(round_num, round_latency)
         emit({"type": "round_complete", "round": round_num})
 
+    # Trigger devil's advocate mini-cycle if needed (no convergence after max rounds with quorum)
+    should_run_devils_advocate = (
+        escalation_allowed
+        and not converged
+        and all_rounds
+        and len(all_rounds) == config.max_rounds
+        and config.mode != 'devil_advocate'
+    )
+
+    if should_run_devils_advocate:
+        emit({
+            "type": "escalation_devils_advocate",
+            "reason": "Max rounds reached without convergence",
+            "rounds_completed": len(all_rounds),
+            "convergence_score": round(convergence_score, 3)
+        })
+
+        last_round_context = json.dumps(all_rounds[-1], indent=2)
+        combined_context = (config.context + "\n\n" if config.context else "") + f"Last round opinions (context for devil's advocate):\n{last_round_context}"
+        devils_config = SessionConfig(
+            query=config.query,
+            mode='devil_advocate',
+            models=config.models,
+            chairman=config.chairman,
+            timeout=config.timeout,
+            anonymize=config.anonymize,
+            council_budget=config.council_budget,
+            output_level=config.output_level,
+            max_rounds=1,
+            context=combined_context
+        )
+
+        devils_start = time.time()
+        devils_responses, devils_personas = await gather_opinions(
+            devils_config,
+            round_num=1,
+            previous_round_opinions=all_rounds[-1],
+            include_personas=True
+        )
+        metrics.record_latency('devils_advocate_round', int((time.time() - devils_start) * 1000))
+
+        valid_devils = sum(1 for r in devils_responses.values() if r.success)
+        if valid_devils >= MIN_QUORUM:
+            devils_advocate_round = {m: r.content for m, r in devils_responses.items() if r.success}
+            devils_advocate_summary = await summarize_devils_advocate_arguments(
+                config.query,
+                devils_advocate_round,
+                devils_personas,
+                config.chairman,
+                config.timeout
+            )
+        else:
+            emit({"type": "warning", "msg": "Devil's advocate mini-cycle aborted due to insufficient valid responses"})
+
     # Stage 2: Peer review (on final round)
     peer_review_start = time.time()
     final_opinions = all_rounds[-1] if all_rounds else {}
@@ -1928,7 +2088,14 @@ async def run_council(config: SessionConfig) -> dict:
 
     # Stage 3: Synthesis (with all rounds context)
     synthesis_start = time.time()
-    synthesis = await synthesize(config, final_opinions, review, conflicts, all_rounds=all_rounds)
+    synthesis = await synthesize(
+        config,
+        final_opinions,
+        review,
+        conflicts,
+        all_rounds=all_rounds,
+        devils_advocate_summary=devils_advocate_summary
+    )
     metrics.record_latency('synthesis', int((time.time() - synthesis_start) * 1000))
 
     duration_ms = int((time.time() - start_time) * 1000)
@@ -1959,7 +2126,8 @@ async def run_council(config: SessionConfig) -> dict:
         "dissent": synthesis.get('dissenting_view'),
         "rounds_completed": len(all_rounds),
         "converged": converged,
-        "convergence_score": round(convergence_score, 3)
+        "convergence_score": round(convergence_score, 3),
+        "devils_advocate_summary": devils_advocate_summary
     })
 
     # Get circuit breaker status for transparency
@@ -1981,7 +2149,8 @@ async def run_council(config: SessionConfig) -> dict:
         "converged": converged,
         "circuit_breaker": cb_status if cb_status else None,
         "degradation": degradation_summary,
-        "adaptive_timeout": timeout_stats
+        "adaptive_timeout": timeout_stats,
+        "devils_advocate_summary": devils_advocate_summary
     })
 
     return {
@@ -2000,6 +2169,8 @@ async def run_council(config: SessionConfig) -> dict:
         "degradation": degradation_summary,
         "circuit_breaker_status": cb_status,
         "adaptive_timeout_stats": timeout_stats,
+        "devils_advocate_summary": devils_advocate_summary,
+        "devils_advocate_round": devils_advocate_round,
         "metrics": metrics.get_summary()
     }
 
