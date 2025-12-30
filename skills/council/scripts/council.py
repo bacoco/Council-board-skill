@@ -734,6 +734,7 @@ class SessionConfig:
     output_level: str
     max_rounds: int
     enable_perf_metrics: bool = False
+    enable_trail: bool = False  # Include detailed deliberation trail in output
     context: Optional[str] = None  # Code or additional context for analysis
 
 @dataclass
@@ -1994,6 +1995,7 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
 
     # Track all rounds
     all_rounds = []
+    deliberation_trail = []  # Detailed trail for --trail flag
     previous_round_opinions = None
     converged = False
     convergence_score = 0.0
@@ -2005,8 +2007,15 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
         round_start = time.time()
         emit({"type": "round_start", "round": round_num, "max_rounds": config.max_rounds})
 
-        # Stage 1: Gather opinions for this round
-        responses = await gather_opinions(config, round_num=round_num, previous_round_opinions=previous_round_opinions)
+        # Stage 1: Gather opinions for this round (always include personas for trail)
+        gather_result = await gather_opinions(config, round_num=round_num, previous_round_opinions=previous_round_opinions, include_personas=True)
+
+        # Unpack responses and persona map
+        if isinstance(gather_result, tuple):
+            responses, persona_map = gather_result
+        else:
+            responses = gather_result
+            persona_map = {}
 
         # Record model latencies from responses
         for model, response in responses.items():
@@ -2029,6 +2038,26 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
 
         opinions = {m: r.content for m, r in responses.items() if r.success}
         all_rounds.append(opinions)
+
+        # Build trail entries for this round
+        for model, response in responses.items():
+            if response.success:
+                persona = persona_map.get(model)
+                # Extract confidence from parsed JSON if available
+                parsed = get_parsed_json(response) if response.content else {}
+                confidence = parsed.get('confidence', 0.0) if isinstance(parsed, dict) else 0.0
+
+                trail_entry = {
+                    "round": round_num,
+                    "model": model,
+                    "persona": persona.title if persona else model,
+                    "persona_role": persona.role if persona else None,
+                    "contribution": response.content[:500] + "..." if len(response.content) > 500 else response.content,
+                    "confidence": confidence,
+                    "latency_ms": response.latency_ms,
+                    "timestamp": datetime.now().isoformat()
+                }
+                deliberation_trail.append(trail_entry)
 
         # Check convergence after round 2+
         if round_num > 1:
@@ -2150,8 +2179,21 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
             'failed_models': degradation.failed_models
         })
 
+    # Build trail metadata if enabled
+    trail_output = None
+    if config.enable_trail and deliberation_trail:
+        trail_output = {
+            "deliberation_trail": deliberation_trail,
+            "trail_metadata": {
+                "total_rounds": len(all_rounds),
+                "participants": len(set(e["model"] for e in deliberation_trail)),
+                "total_contributions": len(deliberation_trail),
+                "consensus_reached": converged
+            }
+        }
+
     # Final output
-    emit({
+    final_emit = {
         "type": "final",
         "answer": synthesis.get('final_answer', ''),
         "confidence": adjusted_confidence,
@@ -2162,7 +2204,10 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
         "converged": converged,
         "convergence_score": round(convergence_score, 3),
         "devils_advocate_summary": devils_advocate_summary
-    })
+    }
+    if trail_output:
+        final_emit.update(trail_output)
+    emit(final_emit)
 
     # Get circuit breaker status for transparency
     cb_status = CIRCUIT_BREAKER.get_status()
@@ -2189,7 +2234,7 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
         "devils_advocate_summary": devils_advocate_summary
     })
 
-    return {
+    result = {
         "session_id": session_id,
         "synthesis": synthesis,
         "all_rounds": all_rounds,
@@ -2209,6 +2254,9 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
         "devils_advocate_round": devils_advocate_round,
         "metrics": metrics.get_summary()
     }
+    if trail_output:
+        result.update(trail_output)
+    return result
 
 # ============================================================================
 # Vote Mode Implementation
@@ -2996,6 +3044,12 @@ def main():
         default=config_defaults.enable_perf_metrics,
         help='Emit performance metrics events (latencies by stage). Default comes from council.config.yaml (enable_perf_metrics).'
     )
+    parser.add_argument(
+        '--trail',
+        action='store_true',
+        default=False,
+        help='Include detailed deliberation trail in output (who said what, per round, with personas)'
+    )
 
     args = parser.parse_args()
 
@@ -3113,6 +3167,7 @@ def main():
         output_level=args.output,
         max_rounds=validation['max_rounds'],  # VALIDATED MAX_ROUNDS
         enable_perf_metrics=args.enable_perf_metrics,
+        enable_trail=args.trail,
         context=validation['context']  # REDACTED CONTEXT
     )
 
