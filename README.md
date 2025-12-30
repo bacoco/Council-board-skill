@@ -9,7 +9,7 @@ Council orchestrates Claude, Gemini, and Codex to debate, challenge, and synthes
 ```
 Council Deliberation: Microservices vs Monolith for Startups
 
-Participants: Chief Architect, Security Officer, Performance Engineer
+Personas: The Velocity Optimizer, The Complexity Cartographer, The Scale Prophet
 Rounds: 2 (converged)
 Confidence: 0.89
 
@@ -18,7 +18,7 @@ For early-stage startups (<15 engineers), start with a modular monolith.
 Extract services only when you have evidence of scaling bottlenecks.
 
 Dissenting View:
-Performance Engineer notes that certain compliance requirements
+The Scale Prophet notes that certain compliance requirements
 (HIPAA, PCI) may justify early service boundaries.
 ```
 *~2 minutes for complex questions*
@@ -39,12 +39,25 @@ Then just ask:
 ```
 
 <details>
-<summary>Prerequisites</summary>
+<summary>Prerequisites - CLI Installation</summary>
 
-Requires these CLIs installed and authenticated:
-- `claude` (Anthropic CLI with Claude Pro/Max)
-- `gemini` (Google Gemini CLI)
-- `codex` (OpenAI Codex CLI)
+**Claude CLI** (requires Claude Pro/Max subscription):
+```bash
+npm install -g @anthropic-ai/claude-code
+claude auth login
+```
+
+**Gemini CLI**:
+```bash
+npm install -g @anthropic-ai/gemini-cli
+gemini auth login
+```
+
+**Codex CLI**:
+```bash
+npm install -g @openai/codex
+codex auth
+```
 
 </details>
 
@@ -70,15 +83,21 @@ Requires these CLIs installed and authenticated:
 Uses your existing `claude`, `gemini`, and `codex` CLI subscriptions. No separate API costs — just your regular CLI usage.
 
 <details>
-<summary>The 3 Personas</summary>
+<summary>Dynamic Personas</summary>
 
-| Model | Role | Focus |
-|-------|------|-------|
-| Claude | Chief Architect | Strategy, trade-offs, maintainability |
-| Gemini | Security Officer | Vulnerabilities, compliance, risk |
-| Codex | Performance Engineer | Speed, algorithms, scalability |
+Council **automatically generates personas tailored to your question**.
 
-In debate mode: Advocate FOR, Advocate AGAINST, Neutral Analyst.
+Example personas generated for "How to secure a payment API?":
+- *The Cryptography Sentinel* - encryption and key management
+- *The Compliance Navigator* - PCI-DSS and regulatory requirements
+- *The Attack Surface Cartographer* - threat modeling and vulnerabilities
+
+Example personas generated for "Best database for real-time chat?":
+- *The Latency Hunter* - sub-millisecond response optimization
+- *The Scale Architect* - horizontal scaling patterns
+- *The Data Consistency Guardian* - CAP theorem trade-offs
+
+Each question gets unique expert personas optimized for that specific problem.
 
 </details>
 
