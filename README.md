@@ -1,48 +1,10 @@
-# Council - Multi-Model AI Deliberation
+# Council
 
-**Get 3 AI perspectives on any question.** Council orchestrates Claude, Gemini, and Codex to debate, challenge, and synthesize answers together.
+**Stop trusting a single AI. Get answers that survive expert debate.**
 
-## How It Works
+Council orchestrates Claude, Gemini, and Codex to debate, challenge, and synthesize answers together. Three perspectives. One synthesis.
 
-```
-You: "Ask the council: Should we use microservices or a monolith?"
-```
-
-That's it. Council automatically:
-1. Asks 3 different AI models your question
-2. Each model sees what the others said
-3. They debate and refine their positions
-4. A final synthesis emerges with confidence score
-
-**No configuration needed.** Just ask naturally.
-
-## Example Phrases
-
-| What you say | What happens |
-|--------------|--------------|
-| "Ask the council: [question]" | 3 models collaborate to answer |
-| "Debate this: [topic]" | Models argue FOR and AGAINST |
-| "Challenge my design: [proposal]" | Red Team attacks, Blue Team defends |
-| "What do other AIs think about [topic]?" | Multi-perspective analysis |
-| "Peer review this code" | Security, architecture, performance review |
-
-## What Makes It Different
-
-**Multi-round deliberation**: Models don't just answer once. They see each other's arguments (anonymized) and provide rebuttals. Like a real debate.
-
-**Automatic escalation**: Starts with collaborative consensus. If models disagree, automatically escalates to structured debate, then adversarial review.
-
-**Convergence detection**: Stops early when models agree. Continues if they don't. Disagreement is a valid output.
-
-## Installation
-
-```bash
-/plugin install github:bacoco/Council-board-skill
-```
-
-Requires: `claude`, `gemini`, `codex` CLIs installed and authenticated.
-
-## Sample Output
+## See It In Action
 
 ```
 Council Deliberation: Microservices vs Monolith for Startups
@@ -59,10 +21,52 @@ Dissenting View:
 Performance Engineer notes that certain compliance requirements
 (HIPAA, PCI) may justify early service boundaries.
 ```
+*~2 minutes for complex questions*
 
-## The 3 Personas
+## Quick Start
 
-Each model plays a specialized role:
+```bash
+/plugin install github:bacoco/Council-board-skill
+```
+
+Then just ask:
+```
+"Ask the council: Should we use microservices?"
+```
+
+<details>
+<summary>Prerequisites</summary>
+
+Requires these CLIs installed and authenticated:
+- `claude` (Anthropic CLI)
+- `gemini` (Google Gemini CLI)
+- `codex` (OpenAI Codex CLI)
+
+</details>
+
+## Example Phrases
+
+| What you say | What happens |
+|--------------|--------------|
+| "Ask the council: [question]" | 3 models collaborate to answer |
+| "Debate this: [topic]" | Models argue FOR and AGAINST |
+| "Challenge my design: [proposal]" | Red Team attacks, Blue Team defends |
+| "Peer review this code" | Security, architecture, performance review |
+
+## Why This Beats Single-Model Answers
+
+**Pressure-tested answers** — Models don't just answer once. They see each other's arguments and provide rebuttals. Like a real debate.
+
+**Structured disagreement** — When models disagree, it automatically escalates to adversarial review. Disagreement is surfaced, not hidden.
+
+**Knows when to stop** — Stops early when models agree. Continues when they don't. You see the confidence score.
+
+## Privacy
+
+🔒 Runs locally via your authenticated CLIs. No data sent anywhere except the APIs you already use.
+
+<details>
+<summary>The 3 Personas</summary>
 
 | Model | Role | Focus |
 |-------|------|-------|
@@ -70,23 +74,27 @@ Each model plays a specialized role:
 | Gemini | Security Officer | Vulnerabilities, compliance, risk |
 | Codex | Performance Engineer | Speed, algorithms, scalability |
 
-In debate mode, roles change to: Advocate FOR, Advocate AGAINST, Neutral Analyst.
+In debate mode: Advocate FOR, Advocate AGAINST, Neutral Analyst.
 
-## Resilience
+</details>
+
+<details>
+<summary>Resilience</summary>
 
 Council keeps working even when models fail:
 - **2 models available**: Continues with 10% confidence penalty
 - **Model keeps failing**: Automatically excluded (circuit breaker)
 - **Slow model**: Timeout adapts based on history
 
-## Privacy
+</details>
 
-Everything runs locally via your authenticated CLIs. No data sent to external services beyond the model APIs you already use.
+<details>
+<summary>Documentation</summary>
 
-## Documentation
-
-- [skills/council/SKILL.md](skills/council/SKILL.md) - Full technical documentation
+- [skills/council/SKILL.md](skills/council/SKILL.md) - Full technical docs
 - [skills/council/references/](skills/council/references/) - Detailed guides
+
+</details>
 
 ## License
 
