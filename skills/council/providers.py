@@ -282,6 +282,7 @@ class CouncilConfig:
     mode: str = 'adaptive'
     convergence_threshold: float = 0.8
     min_quorum: int = 2
+    enable_perf_metrics: bool = False
 
     @classmethod
     def from_file(cls, path: Path) -> 'CouncilConfig':
@@ -292,14 +293,16 @@ class CouncilConfig:
         with open(path, 'r') as f:
             data = yaml.safe_load(f) or {}
 
+        defaults = cls()
         return cls(
-            providers=data.get('providers', cls.providers),
-            chairman=data.get('chairman', 'claude'),
-            timeout=data.get('timeout', 60),
-            max_rounds=data.get('max_rounds', 3),
-            mode=data.get('mode', 'adaptive'),
-            convergence_threshold=data.get('convergence_threshold', 0.8),
-            min_quorum=data.get('min_quorum', 2)
+            providers=data.get('providers', defaults.providers),
+            chairman=data.get('chairman', defaults.chairman),
+            timeout=data.get('timeout', defaults.timeout),
+            max_rounds=data.get('max_rounds', defaults.max_rounds),
+            mode=data.get('mode', defaults.mode),
+            convergence_threshold=data.get('convergence_threshold', defaults.convergence_threshold),
+            min_quorum=data.get('min_quorum', defaults.min_quorum),
+            enable_perf_metrics=data.get('enable_perf_metrics', defaults.enable_perf_metrics)
         )
 
     @classmethod
