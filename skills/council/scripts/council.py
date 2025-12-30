@@ -1136,132 +1136,241 @@ async def run_council(config: SessionConfig) -> dict:
 # Vote Mode Implementation
 # ============================================================================
 
+def validate_vote(vote_data: dict, model: str) -> Tuple[bool, str, dict]:
+    """
+    Validate and normalize vote data.
+
+    Returns:
+        (is_valid, error_message, normalized_data)
+    """
+    # Extract and validate vote
+    vote = vote_data.get('vote', '')
+    if not vote or not isinstance(vote, str):
+        return False, "Missing or invalid vote field", {}
+
+    # Normalize vote (strip whitespace, handle common variations)
+    vote = vote.strip()
+    if not vote:
+        return False, "Empty vote", {}
+
+    # Extract and clamp confidence to [0, 1]
+    raw_confidence = vote_data.get('confidence', 0.5)
+    try:
+        confidence = float(raw_confidence)
+        confidence = max(0.0, min(1.0, confidence))
+    except (TypeError, ValueError):
+        confidence = 0.5
+
+    # Weight is separate from confidence - default to 1.0 (equal voting power)
+    # In future, this could be configured per-model based on domain expertise
+    raw_weight = vote_data.get('weight', 1.0)
+    try:
+        weight = float(raw_weight)
+        weight = max(0.0, min(1.0, weight))
+    except (TypeError, ValueError):
+        weight = 1.0
+
+    # For now, use confidence as weight modifier (weight * confidence)
+    effective_weight = weight * confidence
+
+    normalized = {
+        'vote': vote,
+        'confidence': confidence,
+        'weight': weight,
+        'effective_weight': effective_weight,
+        'justification': str(vote_data.get('justification', '')),
+        'alternative_considered': vote_data.get('alternative_considered'),
+        'would_veto': bool(vote_data.get('would_veto', False))
+    }
+
+    return True, "", normalized
+
 async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
     """
     Collect votes from all models in parallel.
 
     Each model casts a weighted vote with justification.
-    Returns list of VoteBallot objects.
+    Uses explicit (model, task) pairing for robustness.
+    Returns list of validated VoteBallot objects.
     """
     emit({"type": "status", "stage": 1, "msg": "Collecting votes from council members..."})
 
-    # Generate vote-specific personas
+    # First, determine which models are actually available
+    available_models = []
+    for model_instance in config.models:
+        base_model = get_base_model(model_instance)
+        if base_model in ADAPTERS and check_cli_available(base_model):
+            available_models.append(model_instance)
+
+    if not available_models:
+        emit({"type": "error", "msg": "No models available for voting"})
+        return []
+
+    # Generate personas only for available models
     assigned_personas = await generate_personas_with_llm(
         config.query,
-        len(config.models),
+        len(available_models),  # Only generate for available models
         config.chairman,
         mode='vote',
         timeout=30
     )
 
-    tasks = []
-    available_models = []
-    model_index = 0
+    # Build tasks with explicit model association
+    task_model_pairs = []
 
-    for model_instance in config.models:
+    for idx, model_instance in enumerate(available_models):
         base_model = get_base_model(model_instance)
 
-        if base_model in ADAPTERS and check_cli_available(base_model):
-            available_models.append(model_instance)
+        # Get persona for this voter (safe indexing)
+        dynamic_persona = assigned_personas[idx] if idx < len(assigned_personas) else None
+        persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-            # Get persona for this voter
-            dynamic_persona = None
-            if assigned_personas and model_index < len(assigned_personas):
-                dynamic_persona = assigned_personas[model_index]
+        emit({"type": "vote_start", "model": model_instance, "persona": persona_title})
 
-            persona_title = dynamic_persona.title if dynamic_persona else model_instance
-            emit({"type": "vote_start", "model": model_instance, "persona": persona_title})
+        prompt = build_vote_prompt(
+            config.query,
+            options=None,  # Let models determine options from query
+            dynamic_persona=dynamic_persona,
+            code_context=config.context
+        )
 
-            prompt = build_vote_prompt(
-                config.query,
-                options=None,  # Let models determine options from query
-                dynamic_persona=dynamic_persona,
-                code_context=config.context
-            )
-
-            tasks.append(ADAPTERS[base_model](prompt, config.timeout))
-            model_index += 1
+        # Store (model, task) pair for robust result matching
+        task = ADAPTERS[base_model](prompt, config.timeout)
+        task_model_pairs.append((model_instance, task))
 
     # Execute votes in parallel
+    tasks = [pair[1] for pair in task_model_pairs]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     ballots = []
-    for model_instance, result in zip(available_models, results):
+    for (model_instance, _), result in zip(task_model_pairs, results):
         if isinstance(result, Exception):
             emit({"type": "vote_error", "model": model_instance, "error": str(result)})
             continue
 
-        if result.success:
-            try:
-                vote_data = get_parsed_json(result)
-                ballot = VoteBallot(
-                    model=model_instance,
-                    vote=vote_data.get('vote', 'ABSTAIN'),
-                    weight=vote_data.get('confidence', 0.5),  # Use confidence as weight
-                    justification=vote_data.get('justification', ''),
-                    confidence=vote_data.get('confidence', 0.5),
-                    latency_ms=result.latency_ms
-                )
-                ballots.append(ballot)
-                emit({
-                    "type": "vote_cast",
-                    "model": model_instance,
-                    "vote": ballot.vote,
-                    "weight": round(ballot.weight, 2),
-                    "latency_ms": result.latency_ms
-                })
-            except Exception as e:
-                emit({"type": "vote_parse_error", "model": model_instance, "error": str(e)})
-        else:
+        if not result.success:
             emit({"type": "vote_error", "model": model_instance, "error": result.error})
+            continue
+
+        try:
+            vote_data = get_parsed_json(result)
+
+            # Validate and normalize the vote
+            is_valid, error_msg, normalized = validate_vote(vote_data, model_instance)
+
+            if not is_valid:
+                emit({"type": "vote_validation_error", "model": model_instance, "error": error_msg})
+                continue
+
+            ballot = VoteBallot(
+                model=model_instance,
+                vote=normalized['vote'],
+                weight=normalized['effective_weight'],  # Use effective weight (weight * confidence)
+                justification=normalized['justification'],
+                confidence=normalized['confidence'],
+                latency_ms=result.latency_ms
+            )
+            ballots.append(ballot)
+
+            emit({
+                "type": "vote_cast",
+                "model": model_instance,
+                "vote": ballot.vote,
+                "confidence": round(ballot.confidence, 2),
+                "effective_weight": round(ballot.weight, 2),
+                "latency_ms": result.latency_ms
+            })
+
+        except Exception as e:
+            emit({"type": "vote_parse_error", "model": model_instance, "error": str(e)})
 
     return ballots
 
 def tally_votes(ballots: List[VoteBallot]) -> Tuple[dict, dict, str, bool, str]:
     """
-    Tally votes with weighted scoring.
+    Tally votes with weighted scoring and proper tie-breaking.
+
+    Tie-breaking cascade:
+    1. Weighted score (primary)
+    2. Raw vote count (if weighted scores within epsilon)
+    3. Highest single confidence vote (deterministic tiebreaker)
 
     Returns:
         (vote_counts, weighted_scores, winner, tie_broken, tie_breaker_method)
     """
+    # Filter out ABSTAIN votes from tallying
+    valid_ballots = [b for b in ballots if b.vote.upper() != 'ABSTAIN']
+
     vote_counts = {}
     weighted_scores = {}
+    max_confidence_by_option = {}  # Track highest confidence vote per option
 
-    for ballot in ballots:
+    for ballot in valid_ballots:
         vote = ballot.vote
-        weight = ballot.weight
+        # Clamp weight to [0, 1] range
+        weight = max(0.0, min(1.0, ballot.weight))
 
         vote_counts[vote] = vote_counts.get(vote, 0) + 1
         weighted_scores[vote] = weighted_scores.get(vote, 0.0) + weight
 
+        # Track max confidence for tie-breaking
+        if vote not in max_confidence_by_option or ballot.confidence > max_confidence_by_option[vote]:
+            max_confidence_by_option[vote] = ballot.confidence
+
     if not weighted_scores:
         return {}, {}, "NO_VOTES", False, None
 
-    # Find winner by weighted score
-    sorted_options = sorted(weighted_scores.items(), key=lambda x: (-x[1], -vote_counts.get(x[0], 0)))
+    # Sort by weighted score (primary), then by vote count (secondary)
+    sorted_options = sorted(
+        weighted_scores.items(),
+        key=lambda x: (-x[1], -vote_counts.get(x[0], 0))
+    )
 
-    # Check for tie
+    winner = sorted_options[0][0]
     tie_broken = False
     tie_breaker_method = None
 
+    # Check for tie scenarios
+    TIE_EPSILON = 0.05  # 5% threshold for weighted score tie
+
     if len(sorted_options) >= 2:
-        top_score = sorted_options[0][1]
-        second_score = sorted_options[1][1]
+        top_option, top_score = sorted_options[0]
+        second_option, second_score = sorted_options[1]
 
-        if abs(top_score - second_score) < 0.01:  # Tie within 0.01
+        # Weighted scores are tied (within epsilon)
+        if abs(top_score - second_score) < TIE_EPSILON:
+            top_count = vote_counts.get(top_option, 0)
+            second_count = vote_counts.get(second_option, 0)
+
             # Tie-breaker 1: Raw vote count
-            top_count = vote_counts.get(sorted_options[0][0], 0)
-            second_count = vote_counts.get(sorted_options[1][0], 0)
-
-            if top_count > second_count:
+            if top_count != second_count:
+                # Re-sort by vote count to get actual winner
+                count_sorted = sorted(
+                    [(opt, vote_counts.get(opt, 0)) for opt, _ in sorted_options[:2]],
+                    key=lambda x: -x[1]
+                )
+                winner = count_sorted[0][0]
                 tie_broken = True
                 tie_breaker_method = "raw_vote_count"
             else:
-                # Tie-breaker 2: Chairman preference (first in list wins)
-                tie_broken = True
-                tie_breaker_method = "chairman_preference"
+                # Tie-breaker 2: Highest single confidence vote
+                top_max_conf = max_confidence_by_option.get(top_option, 0)
+                second_max_conf = max_confidence_by_option.get(second_option, 0)
 
-    winner = sorted_options[0][0]
+                if top_max_conf != second_max_conf:
+                    conf_sorted = sorted(
+                        [(top_option, top_max_conf), (second_option, second_max_conf)],
+                        key=lambda x: -x[1]
+                    )
+                    winner = conf_sorted[0][0]
+                    tie_broken = True
+                    tie_breaker_method = "highest_confidence"
+                else:
+                    # Tie-breaker 3: Alphabetical (deterministic fallback)
+                    alpha_sorted = sorted([top_option, second_option])
+                    winner = alpha_sorted[0]
+                    tie_broken = True
+                    tie_breaker_method = "alphabetical"
 
     return vote_counts, weighted_scores, winner, tie_broken, tie_breaker_method
 
@@ -1324,12 +1433,40 @@ async def run_vote_council(config: SessionConfig) -> dict:
         winner
     )
 
-    synthesis = {"final_answer": f"Council votes: {winner}", "confidence": margin / 100}
+    # Default synthesis (used if chairman fails)
+    synthesis = {
+        "final_answer": f"Council votes: {winner}",
+        "confidence": margin / 100,
+        "synthesis_failed": False
+    }
+    synthesis_error = None
 
     if config.chairman in ADAPTERS and check_cli_available(config.chairman):
         result = await ADAPTERS[config.chairman](synthesis_prompt, config.timeout)
         if result.success:
-            synthesis = get_parsed_json(result)
+            parsed = get_parsed_json(result)
+            # Validate synthesis has required fields
+            if parsed.get('final_answer'):
+                synthesis = parsed
+                synthesis['synthesis_failed'] = False
+            else:
+                synthesis_error = "Synthesis returned empty answer"
+                synthesis['synthesis_failed'] = True
+        else:
+            synthesis_error = result.error
+            synthesis['synthesis_failed'] = True
+    else:
+        synthesis_error = "Chairman not available"
+        synthesis['synthesis_failed'] = True
+
+    # Surface synthesis failure explicitly
+    if synthesis.get('synthesis_failed'):
+        emit({
+            "type": "synthesis_warning",
+            "msg": "Chairman synthesis failed - using fallback",
+            "error": synthesis_error,
+            "fallback_answer": synthesis['final_answer']
+        })
 
     duration_ms = int((time.time() - start_time) * 1000)
 
