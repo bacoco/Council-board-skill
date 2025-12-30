@@ -43,6 +43,39 @@ JSON_PATTERN = re.compile(r'\{[\s\S]*\}')  # Extract JSON from text
 # Performance instrumentation
 ENABLE_PERF_INSTRUMENTATION = False  # Set to True to emit timing metrics
 
+# Error classification for retry logic (Council recommendation #2)
+TRANSIENT_ERRORS = {'timeout', 'rate_limit', 'connection', '503', '429', 'temporarily', 'overloaded'}
+PERMANENT_ERRORS = {'auth', 'authentication', 'not found', 'invalid', 'permission', 'denied', '401', '403', '404'}
+
+def is_retriable_error(error: str) -> bool:
+    """
+    Classify error as transient (retriable) vs permanent (not retriable).
+
+    Transient errors (network issues, rate limits) may resolve with retry.
+    Permanent errors (auth failures, invalid requests) will never resolve.
+
+    Args:
+        error: Error message string
+
+    Returns:
+        True if error is transient and retry may help, False for permanent errors
+    """
+    if not error:
+        return True  # Unknown errors default to retriable
+
+    error_lower = error.lower()
+
+    # Check for permanent errors first (these should never retry)
+    if any(p in error_lower for p in PERMANENT_ERRORS):
+        return False
+
+    # Check for known transient errors
+    if any(t in error_lower for t in TRANSIENT_ERRORS):
+        return True
+
+    # Default: assume transient (safer to retry than miss recoverable errors)
+    return True
+
 def emit_perf_metric(func_name: str, elapsed_ms: float, **kwargs):
     """Emit performance metric event if instrumentation enabled."""
     if ENABLE_PERF_INSTRUMENTATION:
@@ -892,8 +925,14 @@ async def query_cli_with_retry(model_name: str, cli_config: CLIConfig, prompt: s
                 emit_perf_metric("query_retry_success", 0, model=model_name, attempt=attempt + 1)
             return result
 
-        # Failure - store error and retry if not last attempt
+        # Failure - store error and check if retriable
         last_error = result.error
+
+        # Check if error is permanent (auth, not found, etc.) - don't retry these
+        if not is_retriable_error(last_error):
+            emit_perf_metric("query_permanent_error", 0, model=model_name, error=last_error)
+            CIRCUIT_BREAKER.record_failure(model_name, last_error)
+            return result  # Return immediately, no point retrying
 
         if attempt < max_retries - 1:
             # Exponential backoff with jitter to prevent timing attacks
@@ -946,6 +985,62 @@ ADAPTERS = {
     'gemini': query_gemini,
     'codex': query_codex,
 }
+
+# Chairman failover chain (Council recommendation #1)
+CHAIRMAN_FALLBACK_ORDER = ['claude', 'gemini', 'codex']
+
+def get_chairman_with_fallback(preferred_chairman: str) -> str:
+    """
+    Get a working chairman model with failover to alternates.
+
+    If the preferred chairman (typically Claude) is unavailable due to circuit
+    breaker state or CLI unavailability, falls back to next available model.
+
+    Args:
+        preferred_chairman: The configured chairman model (e.g., 'claude')
+
+    Returns:
+        Name of the best available model to use as chairman
+    """
+    # Build fallback order: preferred first, then others in priority order
+    fallback_order = [preferred_chairman] + [m for m in CHAIRMAN_FALLBACK_ORDER if m != preferred_chairman]
+
+    for model in fallback_order:
+        if CIRCUIT_BREAKER.can_call(model) and check_cli_available(model):
+            if model != preferred_chairman:
+                emit({"type": "chairman_failover", "preferred": preferred_chairman, "using": model})
+            return model
+
+    # All models unavailable - return preferred and let caller handle failure
+    emit({"type": "chairman_failover_exhausted", "msg": "All chairman candidates unavailable"})
+    return preferred_chairman
+
+async def query_chairman(prompt: str, config: 'SessionConfig') -> LLMResponse:
+    """
+    Query the chairman model with automatic failover.
+
+    Uses get_chairman_with_fallback to select best available model,
+    then queries it with retry logic.
+
+    Args:
+        prompt: The prompt to send
+        config: Session configuration containing chairman and timeout
+
+    Returns:
+        LLMResponse from the best available chairman model
+    """
+    chairman = get_chairman_with_fallback(config.chairman)
+
+    if chairman in ADAPTERS:
+        return await ADAPTERS[chairman](prompt, config.timeout)
+
+    return LLMResponse(
+        content='',
+        model=chairman,
+        latency_ms=0,
+        success=False,
+        error=f'No adapter available for chairman: {chairman}'
+    )
 
 # ============================================================================
 # Prompts
@@ -1363,10 +1458,12 @@ Now create {num_models} DIFFERENT personas specific to THIS question. Creative t
 
 JSON array only, start with [ and end with ]:"""
 
-    emit({"type": "persona_generation", "msg": f"Generating {num_models} personas with {chairman}..."})
+    # Use chairman failover chain (Council recommendation #1)
+    actual_chairman = get_chairman_with_fallback(chairman)
+    emit({"type": "persona_generation", "msg": f"Generating {num_models} personas with {actual_chairman}..."})
 
-    if chairman in ADAPTERS and check_cli_available(chairman):
-        result = await ADAPTERS[chairman](prompt, timeout)
+    if actual_chairman in ADAPTERS:
+        result = await ADAPTERS[actual_chairman](prompt, timeout)
         if result.success:
             try:
                 personas_data = get_parsed_json(result)
@@ -1534,24 +1631,27 @@ async def peer_review(config: SessionConfig, opinions: dict[str, str]) -> dict:
         mapping = {m: m for m in opinions}
     
     prompt = build_review_prompt(config.query, anon_responses)
-    
-    # Use chairman for review
-    if config.chairman in ADAPTERS and check_cli_available(config.chairman):
-        result = await ADAPTERS[config.chairman](prompt, config.timeout)
+
+    # Use chairman with failover chain (Council recommendation #1)
+    actual_chairman = get_chairman_with_fallback(config.chairman)
+    if actual_chairman in ADAPTERS:
+        result = await ADAPTERS[actual_chairman](prompt, config.timeout)
         if result.success:
             review = get_parsed_json(result)  # Use cached JSON parsing
             # Emit scores
             for resp_id, scores in review.get('scores', {}).items():
-                emit({"type": "score", "reviewer": config.chairman, "target": resp_id, "scores": scores})
+                emit({"type": "score", "reviewer": actual_chairman, "target": resp_id, "scores": scores})
             return {"review": review, "mapping": mapping}
-    
+
     return {"review": {}, "mapping": mapping}
 
 def extract_contradictions(review: dict) -> list[str]:
     return review.get('key_conflicts', [])
 
 async def synthesize(config: SessionConfig, opinions: dict, review: dict, conflicts: list, all_rounds: list = None) -> dict:
-    emit({"type": "status", "stage": 3, "msg": "Chairman synthesizing..."})
+    # Use chairman with failover chain (Council recommendation #1)
+    actual_chairman = get_chairman_with_fallback(config.chairman)
+    emit({"type": "status", "stage": 3, "msg": f"Chairman ({actual_chairman}) synthesizing..."})
 
     prompt = build_synthesis_prompt(
         config.query,
@@ -1561,8 +1661,8 @@ async def synthesize(config: SessionConfig, opinions: dict, review: dict, confli
         all_rounds=all_rounds
     )
 
-    if config.chairman in ADAPTERS and check_cli_available(config.chairman):
-        result = await ADAPTERS[config.chairman](prompt, config.timeout)
+    if actual_chairman in ADAPTERS:
+        result = await ADAPTERS[actual_chairman](prompt, config.timeout)
         if result.success:
             synthesis = get_parsed_json(result)  # Use cached JSON parsing
             return synthesis
@@ -1630,8 +1730,10 @@ Produce final meta-synthesis as JSON:
 "remaining_uncertainties": []}}
 </instructions>"""
 
-    if chairman in ADAPTERS and check_cli_available(chairman):
-        result = await ADAPTERS[chairman](prompt, timeout)
+    # Use chairman with failover chain (Council recommendation #1)
+    actual_chairman = get_chairman_with_fallback(chairman)
+    if actual_chairman in ADAPTERS:
+        result = await ADAPTERS[actual_chairman](prompt, timeout)
         if result.success:
             return get_parsed_json(result)  # Use cached JSON parsing
 
