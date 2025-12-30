@@ -28,6 +28,10 @@ convergence_threshold: 0.8
 # Council fails if fewer than this respond
 min_quorum: 2
 
+# Enable performance instrumentation events (latencies by stage)
+# Default: false (no additional perf events emitted)
+enable_perf_metrics: false
+
 # ============================================================================
 # Advanced Configuration (uncomment to customize)
 # ============================================================================

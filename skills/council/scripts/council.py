@@ -24,6 +24,7 @@ from typing import Literal, Optional, List, Tuple
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from persona_manager import PersonaManager, Persona
 from security.input_validator import InputValidator, validate_and_sanitize
+from providers import CouncilConfig
 
 # ============================================================================
 # Constants
@@ -47,6 +48,16 @@ ENABLE_PERF_INSTRUMENTATION = False  # Set to True to emit timing metrics
 # Error classification for retry logic (Council recommendation #2)
 TRANSIENT_ERRORS = {'timeout', 'rate_limit', 'connection', '503', '429', 'temporarily', 'overloaded'}
 PERMANENT_ERRORS = {'auth', 'authentication', 'not found', 'invalid', 'permission', 'denied', '401', '403', '404'}
+
+
+def load_council_config_defaults() -> CouncilConfig:
+    """Load defaults from council.config.yaml if available."""
+    try:
+        return CouncilConfig.from_file(CouncilConfig.default_path())
+    except Exception:
+        # Fall back to in-code defaults if config is unreadable
+        return CouncilConfig()
+
 
 def is_retriable_error(error: str) -> bool:
     """
@@ -722,6 +733,7 @@ class SessionConfig:
     council_budget: str
     output_level: str
     max_rounds: int
+    enable_perf_metrics: bool = False
     context: Optional[str] = None  # Code or additional context for analysis
 
 @dataclass
@@ -1411,6 +1423,20 @@ def emit(event: dict):
     redacted_event = INPUT_VALIDATOR.redact_output(event)
     print(json.dumps(redacted_event), flush=True)
 
+
+def emit_perf_metrics(summary: dict):
+    """Emit stage and round latency metrics when instrumentation is enabled."""
+    if not ENABLE_PERF_INSTRUMENTATION:
+        return
+
+    emit({
+        "type": "perf_metrics",
+        "session_id": summary.get("session_id"),
+        "stage_latencies": summary.get("stage_latencies", {}),
+        "round_latencies": summary.get("round_latencies", []),
+        "aggregate_model_latency": summary.get("aggregate_model_latency", {}),
+    })
+
 def anonymize_responses(responses: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
     labels = ['A', 'B', 'C', 'D', 'E']
     models = list(responses.keys())
@@ -1952,6 +1978,12 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
     session_id = f"council-{int(time.time())}"
     start_time = time.time()
 
+    # Enable or disable perf instrumentation for this session
+    global ENABLE_PERF_INSTRUMENTATION
+    ENABLE_PERF_INSTRUMENTATION = config.enable_perf_metrics
+    if ENABLE_PERF_INSTRUMENTATION:
+        emit({"type": "perf_instrumentation_enabled", "session_id": session_id})
+
     # Initialize observability metrics
     metrics = init_metrics(session_id)
 
@@ -1987,8 +2019,10 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
             metrics.emit_event('QuorumNotMet', {'round': round_num, 'required': MIN_QUORUM, 'got': valid_count})
             emit({"type": "error", "msg": f"Quorum not met in round {round_num} (need >= {MIN_QUORUM} valid responses)"})
             if round_num == 1:
+                metrics_summary = metrics.get_summary()
                 metrics.emit_summary()
-                return {"error": "Quorum not met in initial round", "metrics": metrics.get_summary()}
+                emit_perf_metrics(metrics_summary)
+                return {"error": "Quorum not met in initial round", "metrics": metrics_summary}
             else:
                 emit({"type": "warning", "msg": f"Quorum failed in round {round_num}, using previous round data"})
                 break
@@ -2137,7 +2171,9 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
     timeout_stats = adaptive_timeout.get_stats() if adaptive_timeout else None
 
     # Emit metrics summary
+    metrics_summary = metrics.get_summary()
     metrics.emit_summary()
+    emit_perf_metrics(metrics_summary)
 
     emit({
         "type": "meta",
@@ -2471,6 +2507,12 @@ async def run_vote_council(config: SessionConfig) -> dict:
     session_id = f"vote-{int(time.time())}"
     start_time = time.time()
 
+    # Enable or disable perf instrumentation for this session
+    global ENABLE_PERF_INSTRUMENTATION
+    ENABLE_PERF_INSTRUMENTATION = config.enable_perf_metrics
+    if ENABLE_PERF_INSTRUMENTATION:
+        emit({"type": "perf_instrumentation_enabled", "session_id": session_id})
+
     # Initialize observability metrics
     metrics = init_metrics(session_id)
 
@@ -2493,8 +2535,10 @@ async def run_vote_council(config: SessionConfig) -> dict:
     if len(ballots) < MIN_QUORUM:
         metrics.emit_event('QuorumNotMet', {'required': MIN_QUORUM, 'got': len(ballots), 'mode': 'vote'})
         emit({"type": "error", "msg": f"Vote quorum not met (got {len(ballots)}, need {MIN_QUORUM})"})
+        metrics_summary = metrics.get_summary()
         metrics.emit_summary()
-        return {"error": "Vote quorum not met", "ballots": len(ballots), "required": MIN_QUORUM, "metrics": metrics.get_summary()}
+        emit_perf_metrics(metrics_summary)
+        return {"error": "Vote quorum not met", "ballots": len(ballots), "required": MIN_QUORUM, "metrics": metrics_summary}
 
     emit({"type": "quorum_met", "votes": len(ballots), "required": MIN_QUORUM})
 
@@ -2601,7 +2645,9 @@ async def run_vote_council(config: SessionConfig) -> dict:
     )
 
     # Emit metrics summary
+    metrics_summary = metrics.get_summary()
     metrics.emit_summary()
+    emit_perf_metrics(metrics_summary)
 
     # Emit degradation event if operating degraded
     if degradation and degradation.level != DegradationLevel.FULL:
@@ -2675,6 +2721,7 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
         council_budget=config.council_budget,
         output_level=config.output_level,
         max_rounds=config.max_rounds,
+        enable_perf_metrics=config.enable_perf_metrics,
         context=config.context
     )
 
@@ -2712,6 +2759,7 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
         council_budget=config.council_budget,
         output_level=config.output_level,
         max_rounds=config.max_rounds,
+        enable_perf_metrics=config.enable_perf_metrics,
         context=config.context
     )
 
@@ -2768,6 +2816,7 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
         council_budget=config.council_budget,
         output_level=config.output_level,
         max_rounds=config.max_rounds,
+        enable_perf_metrics=config.enable_perf_metrics,
         context=config.context
     )
 
@@ -2925,6 +2974,8 @@ def print_setup_status(results: dict):
 # ============================================================================
 
 def main():
+    config_defaults = load_council_config_defaults()
+
     parser = argparse.ArgumentParser(description='LLM Council - Multi-model deliberation')
     parser.add_argument('--check', action='store_true', help='Validate setup (test all CLIs)')
     parser.add_argument('--query', '-q', help='Question to deliberate')
@@ -2939,8 +2990,18 @@ def main():
     parser.add_argument('--budget', default='balanced', choices=['fast', 'balanced', 'thorough'])
     parser.add_argument('--output', default='standard', choices=['minimal', 'standard', 'audit'])
     parser.add_argument('--max-rounds', type=int, default=3, help='Max rounds for deliberation')
+    parser.add_argument(
+        '--enable-perf-metrics',
+        action=argparse.BooleanOptionalAction,
+        default=config_defaults.enable_perf_metrics,
+        help='Emit performance metrics events (latencies by stage). Default comes from council.config.yaml (enable_perf_metrics).'
+    )
 
     args = parser.parse_args()
+
+    # Apply instrumentation setting globally for this invocation (including --check)
+    global ENABLE_PERF_INSTRUMENTATION
+    ENABLE_PERF_INSTRUMENTATION = args.enable_perf_metrics
 
     # ============================================================================
     # Setup Check Mode
@@ -3051,6 +3112,7 @@ def main():
         council_budget=args.budget,
         output_level=args.output,
         max_rounds=validation['max_rounds'],  # VALIDATED MAX_ROUNDS
+        enable_perf_metrics=args.enable_perf_metrics,
         context=validation['context']  # REDACTED CONTEXT
     )
 

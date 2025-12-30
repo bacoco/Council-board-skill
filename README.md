@@ -52,6 +52,11 @@ Then just ask:
 "Ask the council: Should we use microservices?"
 ```
 
+## Usage avancé
+
+- **Métriques de performance** (désactivées par défaut) : lancez le script avec `--enable-perf-metrics` pour émettre les latences par étape et les événements d'instrumentation. Exemple : `python3 skills/council/scripts/council.py --enable-perf-metrics --query "Ask the council: Should we use microservices?"`.
+- **Configuration persistante** : définissez `enable_perf_metrics: true` dans [`skills/council/council.config.yaml`](skills/council/council.config.yaml) pour activer l'instrumentation sans repasser un flag CLI.
+
 <details>
 <summary>Prerequisites - CLI Installation</summary>
 
