@@ -2522,12 +2522,131 @@ async def run_adaptive_cascade(config: SessionConfig) -> dict:
     }
 
 # ============================================================================
+# Setup Validation
+# ============================================================================
+
+def check_setup() -> dict:
+    """
+    Validate that all required CLIs are installed and working.
+    Returns a dict with status for each CLI.
+    """
+    results = {
+        'claude': {'installed': False, 'version': None, 'error': None},
+        'gemini': {'installed': False, 'version': None, 'error': None},
+        'codex': {'installed': False, 'version': None, 'error': None},
+    }
+
+    # Check Claude CLI
+    try:
+        result = subprocess.run(
+            ['claude', '--version'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            results['claude']['installed'] = True
+            results['claude']['version'] = result.stdout.strip().split('\n')[0]
+        else:
+            results['claude']['error'] = result.stderr.strip() or 'Unknown error'
+    except FileNotFoundError:
+        results['claude']['error'] = 'CLI not found. Install: npm install -g @anthropic-ai/claude-code'
+    except subprocess.TimeoutExpired:
+        results['claude']['error'] = 'Timeout checking CLI'
+    except Exception as e:
+        results['claude']['error'] = str(e)
+
+    # Check Gemini CLI
+    try:
+        result = subprocess.run(
+            ['gemini', '--version'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            results['gemini']['installed'] = True
+            results['gemini']['version'] = result.stdout.strip().split('\n')[0]
+        else:
+            results['gemini']['error'] = result.stderr.strip() or 'Unknown error'
+    except FileNotFoundError:
+        results['gemini']['error'] = 'CLI not found. Install: npm install -g @google/gemini-cli'
+    except subprocess.TimeoutExpired:
+        results['gemini']['error'] = 'Timeout checking CLI'
+    except Exception as e:
+        results['gemini']['error'] = str(e)
+
+    # Check Codex CLI
+    try:
+        result = subprocess.run(
+            ['codex', '--version'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            results['codex']['installed'] = True
+            results['codex']['version'] = result.stdout.strip().split('\n')[0]
+        else:
+            results['codex']['error'] = result.stderr.strip() or 'Unknown error'
+    except FileNotFoundError:
+        results['codex']['error'] = 'CLI not found. Install: npm install -g @openai/codex'
+    except subprocess.TimeoutExpired:
+        results['codex']['error'] = 'Timeout checking CLI'
+    except Exception as e:
+        results['codex']['error'] = str(e)
+
+    return results
+
+def print_setup_status(results: dict):
+    """Print setup validation results in a user-friendly format."""
+    print("\n╔══════════════════════════════════════════════════════════════╗")
+    print("║              COUNCIL SETUP VALIDATION                        ║")
+    print("╠══════════════════════════════════════════════════════════════╣")
+
+    all_ok = True
+    for cli, status in results.items():
+        if status['installed']:
+            icon = "✓"
+            version = status['version'] or 'unknown'
+            print(f"║  {icon} {cli:8} │ {version[:45]:<45} ║")
+        else:
+            icon = "✗"
+            all_ok = False
+            error = status['error'] or 'Unknown error'
+            print(f"║  {icon} {cli:8} │ NOT INSTALLED                                ║")
+            # Print error on next line if it exists
+            if error:
+                # Truncate error to fit
+                error_short = error[:55] if len(error) <= 55 else error[:52] + '...'
+                print(f"║             │ → {error_short:<43} ║")
+
+    print("╠══════════════════════════════════════════════════════════════╣")
+
+    installed_count = sum(1 for s in results.values() if s['installed'])
+
+    if all_ok:
+        print("║  STATUS: All CLIs ready ✓                                    ║")
+        print("║  Council can use all 3 models for deliberation.              ║")
+    elif installed_count >= 2:
+        print(f"║  STATUS: Degraded mode ({installed_count}/3 CLIs available)                      ║")
+        print("║  Council will work with reduced confidence.                  ║")
+    else:
+        print(f"║  STATUS: Cannot run ({installed_count}/3 CLIs available)                         ║")
+        print("║  Council requires at least 2 CLIs. Install missing ones.     ║")
+
+    print("╚══════════════════════════════════════════════════════════════╝\n")
+
+    return all_ok
+
+# ============================================================================
 # CLI
 # ============================================================================
 
 def main():
     parser = argparse.ArgumentParser(description='LLM Council - Multi-model deliberation')
-    parser.add_argument('--query', '-q', required=True, help='Question to deliberate')
+    parser.add_argument('--check', action='store_true', help='Validate setup (test all CLIs)')
+    parser.add_argument('--query', '-q', help='Question to deliberate')
     parser.add_argument('--context', '-c', help='Code or additional context for analysis (optional)')
     parser.add_argument('--context-file', '-f', help='Path to file containing context (code, docs, etc.)')
     parser.add_argument('--mode', '-m', default='adaptive',
@@ -2541,6 +2660,19 @@ def main():
     parser.add_argument('--max-rounds', type=int, default=3, help='Max rounds for deliberation')
 
     args = parser.parse_args()
+
+    # ============================================================================
+    # Setup Check Mode
+    # ============================================================================
+
+    if args.check:
+        results = check_setup()
+        all_ok = print_setup_status(results)
+        sys.exit(0 if all_ok else 1)
+
+    # Validate --query is provided when not in check mode
+    if not args.query:
+        parser.error("--query is required (use --check to validate setup instead)")
 
     # ============================================================================
     # Context Loading: File or inline

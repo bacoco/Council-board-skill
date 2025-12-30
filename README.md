@@ -42,6 +42,9 @@ claude plugin marketplace add bacoco/Council-board-skill
 
 # Install the plugin
 claude plugin install council@council-board
+
+# Verify setup
+python3 skills/council/scripts/council.py --check
 ```
 
 Then just ask:
@@ -135,13 +138,83 @@ Council keeps working even when models fail:
 
 </details>
 
-<details>
-<summary>Documentation</summary>
+## Full Transcript Example
 
-- [skills/council/SKILL.md](skills/council/SKILL.md) - Full technical docs
-- [skills/council/references/](skills/council/references/) - Detailed guides
+Real deliberation on a coding question with actual timings:
+
+<details>
+<summary>Question: "Python async scraper hitting rate limits — backoff, semaphore, or queue?"</summary>
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║              COUNCIL SETUP VALIDATION                        ║
+╠══════════════════════════════════════════════════════════════╣
+║  ✓ claude   │ 2.0.76 (Claude Code)                          ║
+║  ✓ gemini   │ 0.16.0                                        ║
+║  ✓ codex    │ codex-cli 0.72.0                              ║
+╠══════════════════════════════════════════════════════════════╣
+║  STATUS: All CLIs ready ✓                                    ║
+╚══════════════════════════════════════════════════════════════╝
+
+Session: council-1767103092
+Mode: consensus | Max rounds: 2
+
+ROUND 1 - Initial Positions
+├─ Personas: The Backpressure Alchemist, Guardian of the Semaphore Gates, The Queue Architect
+├─ Claude (28.6s) ✓
+├─ Gemini (38.1s) ✓
+└─ Codex (10.0s) ✓
+
+ROUND 2 - Rebuttals
+├─ Personas: The Throttle Alchemist, Oracle of the Semaphore Gates, The Queue Architect
+├─ Claude (31.8s) ✓
+├─ Gemini (38.0s) ✓
+└─ Codex (11.1s) ✓
+└─ Convergence: 0.926 ✓
+
+PEER REVIEW
+├─ The Throttle Alchemist: 16/20
+├─ Oracle of the Semaphore Gates: 18/20
+└─ The Queue Architect: 20/20
+
+SYNTHESIS (31.8s)
+├─ Confidence: 0.91
+└─ Contradictions resolved: 3
+
+TOTAL: 168.6s (~2.8 min)
+
+═══════════════════════════════════════════════════════════════
+
+VERDICT: Use all three in a layered architecture.
+
+Your question presents a false trichotomy — at 10,000 URLs/hour
+(~2.8 req/sec), you need a hybrid approach:
+
+1. Queue-Based Foundation (asyncio.Queue)
+2. Per-Host Semaphores (NOT global!)
+3. Token Bucket Rate Limiting (~2.5 req/sec)
+4. Exponential Backoff with Jitter
+5. Adaptive Tuning
+
+Implementation Priority:
+Queue → Per-host Semaphores → Token Bucket → Backoff → Adaptive
+
+DISSENT: Participant A argued semaphores should be primary,
+queue adds unnecessary complexity. Overruled: at 10k URLs/hour,
+queues provide essential operational benefits.
+```
 
 </details>
+
+## Documentation
+
+**→ [skills/council/SKILL.md](skills/council/SKILL.md)** — Full technical documentation
+
+Reference guides in `skills/council/references/`:
+- `modes.md` — Deliberation modes (consensus, debate, devil_advocate)
+- `examples.md` — Usage examples
+- `resilience.md` — Graceful degradation, circuit breaker
+- `security.md` — Input validation, secret redaction
 
 ## License
 
