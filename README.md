@@ -61,9 +61,9 @@ Requires these CLIs installed and authenticated:
 
 **Knows when to stop** — Stops early when models agree. Continues when they don't. You see the confidence score.
 
-## Privacy
+## No API Keys Needed
 
-🔒 Runs locally via your authenticated CLIs. No data sent anywhere except the APIs you already use.
+Uses your existing `claude`, `gemini`, and `codex` CLI subscriptions. No separate API costs — just your regular CLI usage.
 
 <details>
 <summary>The 3 Personas</summary>
