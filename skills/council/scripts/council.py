@@ -197,6 +197,185 @@ class CircuitBreaker:
 CIRCUIT_BREAKER = CircuitBreaker()
 
 # ============================================================================
+# Observability & Metrics
+# ============================================================================
+
+class SessionMetrics:
+    """
+    Lightweight observability for council sessions.
+
+    Tracks:
+    - Latency histograms per stage (persona_gen, model_call, peer_review, synthesis)
+    - Per-model latency stats
+    - Semantic events (timeouts, quorum failures, circuit breaker events)
+    - Session-level aggregates
+
+    Usage:
+        metrics = SessionMetrics(session_id)
+        metrics.record_latency('persona_gen', 1500)
+        metrics.record_model_latency('claude', 2000, success=True)
+        metrics.emit_event('QuorumNotMet', {'required': 2, 'got': 1})
+        summary = metrics.get_summary()
+    """
+
+    # Stage names for latency tracking
+    STAGES = ['persona_gen', 'model_call', 'peer_review', 'synthesis', 'vote_collection', 'vote_tally']
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.start_time = time.time()
+
+        # Latency histograms per stage (list of latencies in ms)
+        self._stage_latencies = {stage: [] for stage in self.STAGES}
+
+        # Per-model latency tracking
+        self._model_latencies = {}  # model -> [latencies]
+        self._model_successes = {}  # model -> count
+        self._model_failures = {}   # model -> count
+
+        # Semantic events log
+        self._events = []
+
+        # Round tracking
+        self._rounds = 0
+        self._round_latencies = []
+
+    def record_latency(self, stage: str, latency_ms: float):
+        """Record latency for a processing stage."""
+        if stage in self._stage_latencies:
+            self._stage_latencies[stage].append(latency_ms)
+
+    def record_model_latency(self, model: str, latency_ms: float, success: bool = True):
+        """Record latency for a specific model call."""
+        if model not in self._model_latencies:
+            self._model_latencies[model] = []
+            self._model_successes[model] = 0
+            self._model_failures[model] = 0
+
+        self._model_latencies[model].append(latency_ms)
+        if success:
+            self._model_successes[model] += 1
+        else:
+            self._model_failures[model] += 1
+
+    def record_round(self, round_num: int, latency_ms: float):
+        """Record completion of a deliberation round."""
+        self._rounds = round_num
+        self._round_latencies.append(latency_ms)
+
+    def emit_event(self, event_type: str, details: dict = None):
+        """
+        Emit a structured semantic event.
+
+        Standard event types:
+        - QuorumNotMet: Required quorum not achieved
+        - ModelTimedOut: Model exceeded timeout
+        - CircuitBreakerOpen: Circuit breaker tripped
+        - PartialResultReturned: Degraded response due to failures
+        - ConvergenceAchieved: Models reached consensus
+        - TieBroken: Vote tie resolved
+        - ValidationWarning: Input validation issues
+        """
+        event = {
+            "type": "observability_event",
+            "event": event_type,
+            "session_id": self.session_id,
+            "timestamp": time.time(),
+            "details": details or {}
+        }
+        self._events.append(event)
+        emit(event)
+
+    def _percentile(self, data: list, p: float) -> float:
+        """Calculate percentile of a list."""
+        if not data:
+            return 0.0
+        sorted_data = sorted(data)
+        k = (len(sorted_data) - 1) * p
+        f = int(k)
+        c = f + 1 if f + 1 < len(sorted_data) else f
+        return sorted_data[f] + (sorted_data[c] - sorted_data[f]) * (k - f)
+
+    def _latency_stats(self, latencies: list) -> dict:
+        """Calculate latency statistics for a list of latencies."""
+        if not latencies:
+            return {"count": 0, "min": 0, "max": 0, "avg": 0, "p50": 0, "p90": 0, "p99": 0}
+
+        return {
+            "count": len(latencies),
+            "min": round(min(latencies), 1),
+            "max": round(max(latencies), 1),
+            "avg": round(sum(latencies) / len(latencies), 1),
+            "p50": round(self._percentile(latencies, 0.50), 1),
+            "p90": round(self._percentile(latencies, 0.90), 1),
+            "p99": round(self._percentile(latencies, 0.99), 1),
+        }
+
+    def get_summary(self) -> dict:
+        """Get comprehensive metrics summary for the session."""
+        total_duration = int((time.time() - self.start_time) * 1000)
+
+        # Stage latency stats
+        stage_stats = {}
+        for stage, latencies in self._stage_latencies.items():
+            if latencies:
+                stage_stats[stage] = self._latency_stats(latencies)
+
+        # Model latency stats
+        model_stats = {}
+        for model in self._model_latencies:
+            model_stats[model] = {
+                "latency": self._latency_stats(self._model_latencies[model]),
+                "successes": self._model_successes.get(model, 0),
+                "failures": self._model_failures.get(model, 0),
+                "success_rate": round(
+                    self._model_successes.get(model, 0) /
+                    max(1, self._model_successes.get(model, 0) + self._model_failures.get(model, 0)),
+                    3
+                )
+            }
+
+        # Aggregate all model call latencies
+        all_model_latencies = []
+        for latencies in self._model_latencies.values():
+            all_model_latencies.extend(latencies)
+
+        return {
+            "session_id": self.session_id,
+            "total_duration_ms": total_duration,
+            "rounds": self._rounds,
+            "round_latencies": self._round_latencies,
+            "stage_latencies": stage_stats,
+            "model_stats": model_stats,
+            "aggregate_model_latency": self._latency_stats(all_model_latencies),
+            "events": [e["event"] for e in self._events],
+            "event_count": len(self._events),
+        }
+
+    def emit_summary(self):
+        """Emit the metrics summary as an observability event."""
+        summary = self.get_summary()
+        emit({
+            "type": "metrics_summary",
+            "session_id": self.session_id,
+            "metrics": summary
+        })
+
+
+# Global metrics instance (set per session)
+CURRENT_METRICS: Optional['SessionMetrics'] = None
+
+def init_metrics(session_id: str) -> SessionMetrics:
+    """Initialize metrics for a new session."""
+    global CURRENT_METRICS
+    CURRENT_METRICS = SessionMetrics(session_id)
+    return CURRENT_METRICS
+
+def get_metrics() -> Optional[SessionMetrics]:
+    """Get current session metrics."""
+    return CURRENT_METRICS
+
+# ============================================================================
 # Data Classes
 # ============================================================================
 
@@ -1006,6 +1185,9 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
     """Gather opinions from all available models in parallel."""
     emit({"type": "status", "stage": 1, "msg": f"Collecting opinions (Round {round_num}, Mode: {config.mode})..."})
 
+    # Track persona generation latency
+    persona_start = time.time()
+
     # Always generate personas dynamically for ALL modes via LLM
     # Generate personas using LLM (Chairman decides optimal experts based on query and mode)
     assigned_personas = await generate_personas_with_llm(
@@ -1015,6 +1197,11 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
         mode=config.mode,
         timeout=30
     )
+
+    # Record persona generation latency
+    metrics = get_metrics()
+    if metrics:
+        metrics.record_latency('persona_gen', int((time.time() - persona_start) * 1000))
 
     tasks = []
     available_models = []
@@ -1190,6 +1377,9 @@ async def run_council(config: SessionConfig) -> dict:
     session_id = f"council-{int(time.time())}"
     start_time = time.time()
 
+    # Initialize observability metrics
+    metrics = init_metrics(session_id)
+
     emit({"type": "status", "stage": 0, "msg": f"Starting council session {session_id} (mode: {config.mode}, max_rounds: {config.max_rounds})"})
 
     # Track all rounds
@@ -1200,17 +1390,25 @@ async def run_council(config: SessionConfig) -> dict:
 
     # Multi-round deliberation loop
     for round_num in range(1, config.max_rounds + 1):
+        round_start = time.time()
         emit({"type": "round_start", "round": round_num, "max_rounds": config.max_rounds})
 
         # Stage 1: Gather opinions for this round
         responses = await gather_opinions(config, round_num=round_num, previous_round_opinions=previous_round_opinions)
 
+        # Record model latencies from responses
+        for model, response in responses.items():
+            metrics.record_model_latency(model, response.latency_ms, success=response.success)
+            metrics.record_latency('model_call', response.latency_ms)
+
         # Check quorum
         valid_count = sum(1 for r in responses.values() if r.success)
         if valid_count < MIN_QUORUM:
+            metrics.emit_event('QuorumNotMet', {'round': round_num, 'required': MIN_QUORUM, 'got': valid_count})
             emit({"type": "error", "msg": f"Quorum not met in round {round_num} (need >= {MIN_QUORUM} valid responses)"})
             if round_num == 1:
-                return {"error": "Quorum not met in initial round"}
+                metrics.emit_summary()
+                return {"error": "Quorum not met in initial round", "metrics": metrics.get_summary()}
             else:
                 emit({"type": "warning", "msg": f"Quorum failed in round {round_num}, using previous round data"})
                 break
@@ -1229,18 +1427,24 @@ async def run_council(config: SessionConfig) -> dict:
             })
 
             if converged:
+                metrics.emit_event('ConvergenceAchieved', {'round': round_num, 'score': convergence_score})
                 emit({"type": "status", "msg": f"Convergence achieved at round {round_num} (score: {convergence_score:.3f})"})
                 break
 
         # Store for next round
         previous_round_opinions = opinions
 
+        # Record round completion
+        round_latency = int((time.time() - round_start) * 1000)
+        metrics.record_round(round_num, round_latency)
         emit({"type": "round_complete", "round": round_num})
 
     # Stage 2: Peer review (on final round)
+    peer_review_start = time.time()
     final_opinions = all_rounds[-1] if all_rounds else {}
     review_result = await peer_review(config, final_opinions)
     review = review_result.get('review', {})
+    metrics.record_latency('peer_review', int((time.time() - peer_review_start) * 1000))
 
     # Stage 2.5: Extract contradictions
     conflicts = extract_contradictions(review)
@@ -1249,7 +1453,9 @@ async def run_council(config: SessionConfig) -> dict:
             emit({"type": "contradiction", "conflict": c, "severity": "medium"})
 
     # Stage 3: Synthesis (with all rounds context)
+    synthesis_start = time.time()
     synthesis = await synthesize(config, final_opinions, review, conflicts, all_rounds=all_rounds)
+    metrics.record_latency('synthesis', int((time.time() - synthesis_start) * 1000))
 
     duration_ms = int((time.time() - start_time) * 1000)
 
@@ -1266,6 +1472,9 @@ async def run_council(config: SessionConfig) -> dict:
 
     # Get circuit breaker status for transparency
     cb_status = CIRCUIT_BREAKER.get_status()
+
+    # Emit metrics summary
+    metrics.emit_summary()
 
     emit({
         "type": "meta",
@@ -1289,7 +1498,8 @@ async def run_council(config: SessionConfig) -> dict:
         "rounds_completed": len(all_rounds),
         "converged": converged,
         "convergence_score": convergence_score,
-        "circuit_breaker_status": cb_status
+        "circuit_breaker_status": cb_status,
+        "metrics": metrics.get_summary()
     }
 
 # ============================================================================
@@ -1547,20 +1757,38 @@ async def run_vote_council(config: SessionConfig) -> dict:
     session_id = f"vote-{int(time.time())}"
     start_time = time.time()
 
+    # Initialize observability metrics
+    metrics = init_metrics(session_id)
+
     emit({"type": "status", "stage": 0, "msg": f"Starting vote session {session_id}"})
 
     # Stage 1: Collect votes in parallel
+    vote_collection_start = time.time()
     ballots = await collect_votes(config)
+    metrics.record_latency('vote_collection', int((time.time() - vote_collection_start) * 1000))
+
+    # Record individual ballot latencies
+    for ballot in ballots:
+        metrics.record_model_latency(ballot.model, ballot.latency_ms, success=True)
+        metrics.record_latency('model_call', ballot.latency_ms)
 
     # Check quorum
     if len(ballots) < MIN_QUORUM:
+        metrics.emit_event('QuorumNotMet', {'required': MIN_QUORUM, 'got': len(ballots), 'mode': 'vote'})
         emit({"type": "error", "msg": f"Vote quorum not met (got {len(ballots)}, need {MIN_QUORUM})"})
-        return {"error": "Vote quorum not met", "ballots": len(ballots), "required": MIN_QUORUM}
+        metrics.emit_summary()
+        return {"error": "Vote quorum not met", "ballots": len(ballots), "required": MIN_QUORUM, "metrics": metrics.get_summary()}
 
     emit({"type": "quorum_met", "votes": len(ballots), "required": MIN_QUORUM})
 
     # Stage 2: Tally votes
+    tally_start = time.time()
     vote_counts, weighted_scores, winner, tie_broken, tie_breaker_method = tally_votes(ballots)
+    metrics.record_latency('vote_tally', int((time.time() - tally_start) * 1000))
+
+    # Record tie-breaking event if applicable
+    if tie_broken:
+        metrics.emit_event('TieBroken', {'method': tie_breaker_method, 'winner': winner})
 
     # Calculate margin
     total_weight = sum(weighted_scores.values())
@@ -1578,6 +1806,7 @@ async def run_vote_council(config: SessionConfig) -> dict:
     })
 
     # Stage 3: Chairman synthesizes result
+    synthesis_start = time.time()
     emit({"type": "status", "stage": 2, "msg": "Chairman synthesizing vote results..."})
 
     ballots_dict = [
@@ -1619,8 +1848,12 @@ async def run_vote_council(config: SessionConfig) -> dict:
         synthesis_error = "Chairman not available"
         synthesis['synthesis_failed'] = True
 
+    # Record synthesis latency
+    metrics.record_latency('synthesis', int((time.time() - synthesis_start) * 1000))
+
     # Surface synthesis failure explicitly
     if synthesis.get('synthesis_failed'):
+        metrics.emit_event('SynthesisFailed', {'error': synthesis_error})
         emit({
             "type": "synthesis_warning",
             "msg": "Chairman synthesis failed - using fallback",
@@ -1642,6 +1875,9 @@ async def run_vote_council(config: SessionConfig) -> dict:
         tie_broken=tie_broken,
         tie_breaker_method=tie_breaker_method
     )
+
+    # Emit metrics summary
+    metrics.emit_summary()
 
     # Final output
     emit({
@@ -1668,7 +1904,8 @@ async def run_vote_council(config: SessionConfig) -> dict:
         "mode": "vote",
         "vote_result": asdict(vote_result),
         "synthesis": synthesis,
-        "duration_ms": duration_ms
+        "duration_ms": duration_ms,
+        "metrics": metrics.get_summary()
     }
 
 async def run_adaptive_cascade(config: SessionConfig) -> dict:
