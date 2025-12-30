@@ -203,8 +203,15 @@ GitHub, Basecamp contradicts this.
 
 ## Documentation
 
-- **[skills/council/SKILL.md](skills/council/SKILL.md)**: Complete skill documentation with examples
-- **[skills/council/references/](skills/council/references/)**: Detailed guides for each mode
+- **[skills/council/SKILL.md](skills/council/SKILL.md)**: Complete skill documentation
+- **Reference guides**:
+  - `references/modes.md` - Deliberation mode details
+  - `references/examples.md` - Detailed usage examples
+  - `references/resilience.md` - Graceful degradation details
+  - `references/security.md` - Security implementation
+  - `references/output-format.md` - Response templates
+  - `references/prompts.md` - Prompt templates
+  - `references/schemas.md` - JSON response schemas
 
 ## How It Works Technically
 
@@ -223,6 +230,33 @@ GitHub, Basecamp contradicts this.
 - **Audit trail**: NDJSON event log for every session (useful for debugging and analysis)
 - **Convergence detection**: Automatically stops iteration when models reach agreement (saves time and cost)
 - **Multi-round feedback**: Models see each other's arguments and provide rebuttals
+
+## Resilience Features
+
+The council continues operating even when models fail:
+
+| Feature | Description |
+|---------|-------------|
+| **Graceful Degradation** | Adjusts confidence when models unavailable (FULL → DEGRADED → MINIMAL) |
+| **Circuit Breaker** | Excludes repeatedly failing models (3+ failures → OPEN state) |
+| **Adaptive Timeout** | Learns from response times, adjusts dynamically (p95 × 1.5) |
+| **Chairman Failover** | claude → gemini → codex if primary chairman fails |
+| **Error Classification** | Skips retries for permanent errors (auth, 404), retries transient (timeout, 503) |
+
+### Degradation Levels
+
+| Level | Condition | Confidence Penalty |
+|-------|-----------|-------------------|
+| FULL | All 3 models available | 0% |
+| DEGRADED | 2 models available | 10% |
+| MINIMAL | <2 models | Cannot continue |
+
+### Security Features
+
+- **Shell Injection Prevention**: Blocks `;`, `&`, `|`, backticks, `$()`
+- **Prompt Injection Detection**: Blocks instruction overrides, privilege escalation
+- **Secret Redaction**: Auto-redacts API keys, tokens in input/output
+- **DoS Protection**: Query limit 50K chars, context limit 200K chars
 
 ## Test Results
 
