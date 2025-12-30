@@ -26,7 +26,11 @@ Performance Engineer notes that certain compliance requirements
 ## Quick Start
 
 ```bash
-/plugin install github:bacoco/Council-board-skill
+# Add the marketplace (one time)
+claude plugin marketplace add bacoco/Council-board-skill
+
+# Install the plugin
+claude plugin install council@council-board
 ```
 
 Then just ask:
@@ -38,7 +42,7 @@ Then just ask:
 <summary>Prerequisites</summary>
 
 Requires these CLIs installed and authenticated:
-- `claude` (Anthropic CLI)
+- `claude` (Anthropic CLI with Claude Pro/Max)
 - `gemini` (Google Gemini CLI)
 - `codex` (OpenAI Codex CLI)
 
