@@ -1,0 +1,60 @@
+# Council Configuration
+# Copy this file and customize for your setup
+
+# Models to use for deliberation
+providers:
+  - claude
+  - gemini
+  - codex
+
+# Model used for synthesis and peer review
+chairman: claude
+
+# Timeout per model query (seconds)
+timeout: 60
+
+# Maximum deliberation rounds before forcing synthesis
+max_rounds: 3
+
+# Default deliberation mode
+# Options: adaptive, consensus, debate, vote, devil_advocate
+mode: adaptive
+
+# Convergence threshold (0.0-1.0)
+# Higher = stricter agreement required before early termination
+convergence_threshold: 0.8
+
+# Minimum models required per round (quorum)
+# Council fails if fewer than this respond
+min_quorum: 2
+
+# ============================================================================
+# Advanced Configuration (uncomment to customize)
+# ============================================================================
+
+# Per-provider overrides
+# provider_config:
+#   claude:
+#     timeout: 90
+#   gemini:
+#     timeout: 45
+#   codex:
+#     timeout: 30
+
+# Circuit breaker settings
+# circuit_breaker:
+#   failure_threshold: 3
+#   recovery_timeout: 60
+#   success_threshold: 2
+
+# Retry settings
+# retry:
+#   max_retries: 3
+#   base_delay: 2
+#   max_delay: 60
+
+# Adaptive timeout settings
+# adaptive_timeout:
+#   min_factor: 0.5
+#   max_factor: 2.0
+#   sample_size: 20

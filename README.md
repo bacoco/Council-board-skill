@@ -210,11 +210,14 @@ queues provide essential operational benefits.
 
 **→ [skills/council/SKILL.md](skills/council/SKILL.md)** — Full technical documentation
 
+**→ [skills/council/council.config.yaml](skills/council/council.config.yaml)** — Configuration template
+
 Reference guides in `skills/council/references/`:
 - `modes.md` — Deliberation modes (consensus, debate, devil_advocate)
-- `examples.md` — Usage examples
+- `failure-modes.md` — Error handling, timeouts, recovery
 - `resilience.md` — Graceful degradation, circuit breaker
 - `security.md` — Input validation, secret redaction
+- `examples.md` — Usage examples
 
 ## License
 

@@ -200,6 +200,20 @@ Present results as (see `references/output-format.md` for full template):
 **Dissenting View**: [if significant]
 ```
 
+## Configuration
+
+Council can be configured via `council.config.yaml`:
+
+```yaml
+providers: [claude, gemini, codex]
+chairman: claude
+timeout: 60
+max_rounds: 3
+mode: adaptive
+convergence_threshold: 0.8
+min_quorum: 2
+```
+
 ## Reference Files
 
 - `references/modes.md` - Deliberation mode details
@@ -207,5 +221,6 @@ Present results as (see `references/output-format.md` for full template):
 - `references/schemas.md` - JSON response schemas
 - `references/security.md` - Security implementation
 - `references/resilience.md` - Graceful degradation details
+- `references/failure-modes.md` - Error handling and recovery
 - `references/output-format.md` - Response templates
 - `references/examples.md` - Detailed usage examples
