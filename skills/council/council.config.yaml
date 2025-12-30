@@ -32,6 +32,10 @@ min_quorum: 2
 # Default: false (no additional perf events emitted)
 enable_perf_metrics: false
 
+# Enable deliberation trail in output (who said what per round)
+# Default: true (shows personas, answers, confidence per contribution)
+enable_trail: true
+
 # ============================================================================
 # Advanced Configuration (uncomment to customize)
 # ============================================================================

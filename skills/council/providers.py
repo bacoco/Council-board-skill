@@ -283,6 +283,7 @@ class CouncilConfig:
     convergence_threshold: float = 0.8
     min_quorum: int = 2
     enable_perf_metrics: bool = False
+    enable_trail: bool = True  # Show deliberation trail by default
 
     @classmethod
     def from_file(cls, path: Path) -> 'CouncilConfig':
@@ -302,7 +303,8 @@ class CouncilConfig:
             mode=data.get('mode', defaults.mode),
             convergence_threshold=data.get('convergence_threshold', defaults.convergence_threshold),
             min_quorum=data.get('min_quorum', defaults.min_quorum),
-            enable_perf_metrics=data.get('enable_perf_metrics', defaults.enable_perf_metrics)
+            enable_perf_metrics=data.get('enable_perf_metrics', defaults.enable_perf_metrics),
+            enable_trail=data.get('enable_trail', defaults.enable_trail)
         )
 
     @classmethod

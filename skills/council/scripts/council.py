@@ -2043,19 +2043,30 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
         for model, response in responses.items():
             if response.success:
                 persona = persona_map.get(model)
-                # Extract confidence from parsed JSON if available
+                # Extract answer and confidence from parsed JSON
                 parsed = get_parsed_json(response) if response.content else {}
-                confidence = parsed.get('confidence', 0.0) if isinstance(parsed, dict) else 0.0
+                if isinstance(parsed, dict):
+                    # Extract the actual answer, not the raw JSON
+                    answer = parsed.get('answer', parsed.get('final_answer', ''))
+                    confidence = parsed.get('confidence', 0.0)
+                    key_points = parsed.get('key_points', [])
+                else:
+                    answer = response.content
+                    confidence = 0.0
+                    key_points = []
+
+                # Truncate answer to 300 chars for readability
+                short_answer = answer[:300] + "..." if len(answer) > 300 else answer
 
                 trail_entry = {
                     "round": round_num,
                     "model": model,
                     "persona": persona.title if persona else model,
                     "persona_role": persona.role if persona else None,
-                    "contribution": response.content[:500] + "..." if len(response.content) > 500 else response.content,
+                    "answer": short_answer,
+                    "key_points": key_points[:3] if key_points else None,  # Max 3 points
                     "confidence": confidence,
-                    "latency_ms": response.latency_ms,
-                    "timestamp": datetime.now().isoformat()
+                    "latency_ms": response.latency_ms
                 }
                 deliberation_trail.append(trail_entry)
 
@@ -3046,9 +3057,9 @@ def main():
     )
     parser.add_argument(
         '--trail',
-        action='store_true',
-        default=False,
-        help='Include detailed deliberation trail in output (who said what, per round, with personas)'
+        action=argparse.BooleanOptionalAction,
+        default=config_defaults.enable_trail,
+        help='Include deliberation trail in output (who said what). Default comes from council.config.yaml (enable_trail). Use --no-trail to disable.'
     )
 
     args = parser.parse_args()
