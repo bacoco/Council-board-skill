@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Optional, List, Tuple
+from typing import Literal, Optional, List, Tuple, Union, Dict
 
 # Import PersonaManager and Security
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1655,7 +1655,7 @@ JSON array only, start with [ and end with ]:"""
     cache_bucket[cache_key] = personas
     return personas
 
-async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None, include_personas: bool = False) -> dict[str, LLMResponse] | tuple[dict[str, LLMResponse], dict[str, Persona]]:
+async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None, include_personas: bool = False) -> Union[Dict[str, "LLMResponse"], Tuple[Dict[str, "LLMResponse"], Dict[str, Persona]]]:
     """Gather opinions from all available models in parallel with graceful degradation."""
     emit({"type": "status", "stage": 1, "msg": f"Collecting opinions (Round {round_num}, Mode: {config.mode})..."})
 
@@ -1774,7 +1774,7 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
 
     return responses
 
-def infer_devils_team(persona: Persona | None) -> str:
+def infer_devils_team(persona: Optional[Persona]) -> str:
     """Infer devil's advocate team based on persona metadata."""
     if not persona:
         return "unassigned"
