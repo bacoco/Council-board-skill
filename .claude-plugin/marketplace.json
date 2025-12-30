@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "council",
-      "source": ".",
+      "source": "./",
       "description": "Orchestrates Claude, Gemini, and Codex to debate, challenge, and synthesize answers together",
       "version": "1.0.0",
       "strict": false
