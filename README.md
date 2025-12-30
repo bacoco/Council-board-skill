@@ -4,6 +4,17 @@
 
 Council orchestrates Claude, Gemini, and Codex to debate, challenge, and synthesize answers together. Three perspectives. One synthesis.
 
+## Inspired By
+
+> *"LLM Council works together to answer your hardest questions"*
+> — [Andrej Karpathy](https://github.com/karpathy/llm-council)
+
+This project extends Karpathy's [LLM Council](https://github.com/karpathy/llm-council) concept with:
+- **Dynamic persona generation** — AI-generated expert roles tailored to each question
+- **Multi-round deliberation** — Models see each other's arguments and provide rebuttals
+- **Automatic escalation** — Consensus → Debate → Devil's Advocate based on convergence
+- **Claude Code integration** — Works as a native skill, not a separate web app
+
 ## See It In Action
 
 ```
@@ -83,21 +94,34 @@ codex auth
 Uses your existing `claude`, `gemini`, and `codex` CLI subscriptions. No separate API costs — just your regular CLI usage.
 
 <details>
-<summary>Dynamic Personas</summary>
+<summary>Dynamic Personas — Council Self-Analysis</summary>
 
 Council **automatically generates personas tailored to your question**.
 
 Example personas generated for "How to secure a payment API?":
-- *The Cryptography Sentinel* - encryption and key management
-- *The Compliance Navigator* - PCI-DSS and regulatory requirements
-- *The Attack Surface Cartographer* - threat modeling and vulnerabilities
+- *The Cryptography Sentinel* — encryption and key management
+- *The Compliance Navigator* — PCI-DSS and regulatory requirements
+- *The Attack Surface Cartographer* — threat modeling and vulnerabilities
 
-Example personas generated for "Best database for real-time chat?":
-- *The Latency Hunter* - sub-millisecond response optimization
-- *The Scale Architect* - horizontal scaling patterns
-- *The Data Consistency Guardian* - CAP theorem trade-offs
+### We Asked the Council About Itself
 
-Each question gets unique expert personas optimized for that specific problem.
+**Question**: *"Are creative persona names like 'The Cryptography Sentinel' or 'The Latency Hunter' relevant for generating out-of-the-box thinking? Or is it just superficial marketing?"*
+
+**Council Verdict** (Convergence: 0.834):
+
+> Creative persona names are **neither superficial marketing nor cognitive magic — they're an effective prompt configuration tool**.
+
+**Three levels of real impact:**
+
+1. **Cognitive framing (real but moderate)** — "Hunter" invokes tracking, prey, patience — metaphors that color reasoning differently than "Engineer". The effect operates on style and focus, not fundamental logical structure.
+
+2. **Multi-agent differentiation (crucial)** — Generic names ("Expert 1", "Analyst 2") create gravitational pull toward convergent outputs. Distinctive names maintain separation of reasoning threads and **expand the perceived search space**.
+
+3. **Human reception (measurable)** — Creative labels increase perceived confidence, engagement, and willingness to consider divergent views — even when underlying content is equivalent.
+
+**Dissent (Codex)**: *Without rigorous comparative data, attributing effects to creative names remains post-hoc rationalization. The "cognitive priming" analogy is potentially anthropomorphic.*
+
+**Nuanced conclusion**: Marginal utility of creative names decreases sharply when behavioral specifications are already robust. Their power is maximal in under-specified contexts where the model must fill inferential gaps.
 
 </details>
 
@@ -122,3 +146,7 @@ Council keeps working even when models fail:
 ## License
 
 MIT - [LICENSE](LICENSE)
+
+---
+
+*Inspired by [Andrej Karpathy's LLM Council](https://github.com/karpathy/llm-council). Research support: [MIT "Debating LLMs" study (2024)](https://venturebeat.com/ai/a-weekend-vibe-code-hack-by-andrej-karpathy-quietly-sketches-the-missing) found that models produce more accurate results when prompted to critique each other's outputs.*
