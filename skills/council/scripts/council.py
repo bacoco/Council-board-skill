@@ -39,11 +39,21 @@ CONVERGENCE_THRESHOLD = 0.8          # Threshold for declaring convergence
 MIN_QUORUM = 2  # Minimum valid responses required per round
 DEFAULT_TIMEOUT = 60  # Default timeout in seconds for CLI calls
 
+# Per-model timeouts (Codex needs more time for code exploration)
+MODEL_TIMEOUTS = {
+    'claude': 60,
+    'gemini': 60,
+    'codex': 120,  # Codex explores code with tools, needs more time
+}
+
 # Pre-compiled regex patterns (performance optimization)
 JSON_PATTERN = re.compile(r'\{[\s\S]*\}')  # Extract JSON from text
 
 # Performance instrumentation
 ENABLE_PERF_INSTRUMENTATION = False  # Set to True to emit timing metrics
+
+# Human-readable output mode
+HUMAN_OUTPUT = False  # Set to True for user-friendly CLI output
 
 # Error classification for retry logic (Council recommendation #2)
 TRANSIENT_ERRORS = {'timeout', 'rate_limit', 'connection', '503', '429', 'temporarily', 'overloaded'}
@@ -882,6 +892,36 @@ def expand_models_with_fallback(requested_models: List[str], min_models: int = 3
 
     return expanded_models[:min_models]
 
+# Cache for project root (computed once per session)
+_PROJECT_ROOT_CACHE: Optional[Path] = None
+
+def find_project_root() -> Optional[Path]:
+    """
+    Find the project root directory by looking for common project markers.
+
+    Searches upward from current directory for .git, package.json, pyproject.toml, etc.
+    Result is cached for the session to avoid repeated filesystem lookups.
+
+    Returns:
+        Path to project root, or current directory if no markers found
+    """
+    global _PROJECT_ROOT_CACHE
+    if _PROJECT_ROOT_CACHE is not None:
+        return _PROJECT_ROOT_CACHE
+
+    cwd = Path.cwd()
+    markers = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'pom.xml']
+
+    for parent in [cwd] + list(cwd.parents):
+        for marker in markers:
+            if (parent / marker).exists():
+                _PROJECT_ROOT_CACHE = parent
+                return parent
+
+    # No marker found, use current directory
+    _PROJECT_ROOT_CACHE = cwd
+    return cwd
+
 async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout: int) -> LLMResponse:
     """
     Generic CLI query function that works for all model CLIs.
@@ -901,13 +941,18 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
         # Build command
         cmd = [cli_config.name] + cli_config.args
 
-        # Create subprocess
+        # Get project root for CLI working directory
+        # This allows CLIs like codex to explore the project context
+        project_root = find_project_root()
+
+        # Create subprocess with project root as working directory
         if cli_config.use_stdin:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                cwd=project_root
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(input=prompt.encode()),
@@ -919,7 +964,8 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                cwd=project_root
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 
@@ -1171,10 +1217,22 @@ Consider their arguments. Provide {action_verb}, concessions, or refinements bas
     elif mode == 'devil_advocate':
         mode_instructions = "\n<devils_advocate_mode>You are in DEVIL'S ADVOCATE mode. Red Team attacks, Blue Team defends, Purple Team synthesizes. Be thorough in your assigned role.</devils_advocate_mode>\n"
 
+    # Exploration instruction - only for questions that need code/project context
+    exploration_instruction = """
+<tool_usage>
+If this question involves code, architecture, implementation, or project-specific details:
+- Use your tools (ls, cat, grep, git) to inspect the actual codebase
+- Base answers on real code, not assumptions
+
+For general/theoretical questions: answer directly without exploration.
+</tool_usage>
+
+"""
+
     return f"""<s>You are participating in an LLM council deliberation (Round {round_num}, Mode: {mode}).
 Respond ONLY with valid JSON. No markdown, no preamble.</s>
 
-{persona_prefix}{mode_instructions}{code_context_block}{previous_context_block}<council_query>
+{persona_prefix}{mode_instructions}{exploration_instruction}{code_context_block}{previous_context_block}<council_query>
 {query}
 </council_query>
 
@@ -1422,7 +1480,101 @@ def emit(event: dict):
     event['ts'] = int(time.time())
     # Redact secrets from output before emission
     redacted_event = INPUT_VALIDATOR.redact_output(event)
-    print(json.dumps(redacted_event), flush=True)
+
+    if HUMAN_OUTPUT:
+        # Human-readable output for CLI users
+        _emit_human(redacted_event)
+    else:
+        print(json.dumps(redacted_event), flush=True)
+
+def _emit_human(event: dict):
+    """Format event as human-readable output."""
+    event_type = event.get('type', '')
+
+    # Status messages
+    if event_type == 'status':
+        msg = event.get('msg', '')
+        print(f"📋 {msg}", flush=True)
+
+    # Round progress
+    elif event_type == 'round_start':
+        round_num = event.get('round', 1)
+        max_rounds = event.get('max_rounds', 3)
+        print(f"\n🔄 Round {round_num}/{max_rounds}", flush=True)
+
+    elif event_type == 'round_complete':
+        print(f"   ✓ Round complete", flush=True)
+
+    # Persona generation
+    elif event_type == 'persona_generation':
+        print(f"🎭 Generating personas...", flush=True)
+
+    elif event_type == 'persona_generation_success':
+        personas = event.get('personas', [])
+        print(f"   ✓ Personas: {', '.join(personas)}", flush=True)
+
+    # Model calls
+    elif event_type == 'opinion_start':
+        model = event.get('model', 'unknown')
+        persona = event.get('persona', model)
+        print(f"   🤖 {model.upper()} ({persona}) thinking...", flush=True)
+
+    elif event_type == 'opinion_complete':
+        model = event.get('model', 'unknown')
+        latency = event.get('latency_ms', 0)
+        print(f"   ✅ {model.upper()} responded ({latency/1000:.1f}s)", flush=True)
+
+    elif event_type == 'opinion_error':
+        model = event.get('model', 'unknown')
+        error = event.get('error', 'unknown error')
+        print(f"   ❌ {model.upper()} failed: {error[:50]}", flush=True)
+
+    elif event_type == 'opinion_skip':
+        model = event.get('model', 'unknown')
+        reason = event.get('reason', 'unknown')
+        print(f"   ⏭️  {model.upper()} skipped: {reason}", flush=True)
+
+    # Peer review and synthesis
+    elif event_type == 'status' and 'review' in event.get('msg', '').lower():
+        print(f"📝 Peer review in progress...", flush=True)
+
+    elif event_type == 'status' and 'synthesiz' in event.get('msg', '').lower():
+        print(f"🧠 Synthesizing final answer...", flush=True)
+
+    # Trail saved
+    elif event_type == 'trail_saved':
+        path = event.get('path', '')
+        print(f"\n📄 Trail saved: {path}", flush=True)
+
+    # Final answer
+    elif event_type == 'final':
+        confidence = event.get('confidence', 0)
+        answer = event.get('answer', '')
+        print(f"\n{'='*60}", flush=True)
+        print(f"🎯 COUNCIL ANSWER (confidence: {confidence:.0%})", flush=True)
+        print(f"{'='*60}", flush=True)
+        # Wrap answer to ~80 chars
+        import textwrap
+        wrapped = textwrap.fill(answer, width=78)
+        print(wrapped, flush=True)
+        print(f"{'='*60}\n", flush=True)
+
+    # Degradation/errors
+    elif event_type == 'error':
+        msg = event.get('msg', '')
+        print(f"⚠️  Error: {msg}", flush=True)
+
+    elif event_type == 'escalation_devils_advocate':
+        print(f"\n😈 Escalating to Devil's Advocate mode...", flush=True)
+
+    # Ignore technical events in human mode
+    elif event_type in ('meta', 'metrics_summary', 'perf_metric', 'observability_event',
+                        'degradation_status', 'convergence_check', 'score', 'contradiction'):
+        pass  # Silent in human mode
+
+    # Default: show type for unknown events
+    else:
+        pass  # Silent for unhandled events
 
 
 def emit_perf_metrics(summary: dict):
@@ -1454,7 +1606,9 @@ def generate_trail_markdown(
     duration_ms: int,
     converged: bool,
     convergence_score: float,
-    confidence: float
+    confidence: float,
+    excluded_models: List[dict] = None,
+    config_models: List[str] = None
 ) -> str:
     """
     Generate a human-readable Markdown document from the deliberation trail.
@@ -1481,6 +1635,49 @@ def generate_trail_markdown(
     lines.append("")
     lines.append(f"> {query}")
     lines.append("")
+
+    # Participation Status section - show which models participated vs failed/skipped
+    if config_models:
+        lines.append("## Participation Status")
+        lines.append("")
+        lines.append("| Model | Status | Details |")
+        lines.append("|-------|--------|---------|")
+
+        # Build participation info from trail and excluded_models
+        participated_models = set()
+        for entry in deliberation_trail:
+            participated_models.add(entry.get("model", ""))
+
+        excluded_by_model = {}
+        if excluded_models:
+            for exc in excluded_models:
+                model = exc.get("model", "")
+                if model not in excluded_by_model:
+                    excluded_by_model[model] = exc
+
+        for model in config_models:
+            base_model = model.split('_instance_')[0] if '_instance_' in model else model
+            if model in participated_models or base_model in participated_models:
+                lines.append(f"| {base_model} | ✓ Participated | - |")
+            elif model in excluded_by_model:
+                exc = excluded_by_model[model]
+                status = exc.get("status", "FAILED")
+                reason = exc.get("reason", "unknown")
+                # Truncate long reasons
+                if len(reason) > 50:
+                    reason = reason[:47] + "..."
+                lines.append(f"| {base_model} | ✗ {status} | {reason} |")
+            elif base_model in excluded_by_model:
+                exc = excluded_by_model[base_model]
+                status = exc.get("status", "FAILED")
+                reason = exc.get("reason", "unknown")
+                if len(reason) > 50:
+                    reason = reason[:47] + "..."
+                lines.append(f"| {base_model} | ✗ {status} | {reason} |")
+            else:
+                lines.append(f"| {base_model} | ? Unknown | No response recorded |")
+
+        lines.append("")
 
     # Group trail entries by round
     rounds_data = {}
@@ -1616,6 +1813,7 @@ def save_trail_to_file(
     markdown_content: str,
     session_id: str,
     query: str,
+    mode: str = "consensus",
     output_dir: str = "./council_trails"
 ) -> Path:
     """
@@ -1625,6 +1823,7 @@ def save_trail_to_file(
         markdown_content: Generated Markdown string
         session_id: Council session ID
         query: Original query (for filename)
+        mode: Deliberation mode (consensus, debate, vote, etc.)
         output_dir: Directory to save file
 
     Returns:
@@ -1634,15 +1833,16 @@ def save_trail_to_file(
     output_path = Path(output_dir).expanduser()
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Generate filename
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    # Generate filename with readable timestamp and mode
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    time_str = datetime.now().strftime("%Hh%M")
 
     # Create slug from query (first 5 words, alphanumeric only)
     words = re.sub(r'[^a-zA-Z0-9\s]', '', query).lower().split()[:5]
     slug = "-".join(words) if words else "query"
-    slug = slug[:50]  # Limit length
+    slug = slug[:30]  # Limit length
 
-    filename = f"council_{timestamp}_{slug}.md"
+    filename = f"council_{date_str}_{time_str}_{mode}_{slug}.md"
     filepath = output_path / filename
 
     # Write file
@@ -1869,7 +2069,7 @@ JSON array only, start with [ and end with ]:"""
     cache_bucket[cache_key] = personas
     return personas
 
-async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None, include_personas: bool = False) -> Union[Dict[str, "LLMResponse"], Tuple[Dict[str, "LLMResponse"], Dict[str, Persona]]]:
+async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_round_opinions: dict = None, include_personas: bool = False, excluded_models: list = None) -> Union[Dict[str, "LLMResponse"], Tuple[Dict[str, "LLMResponse"], Dict[str, Persona]]]:
     """Gather opinions from all available models in parallel with graceful degradation."""
     emit({"type": "status", "stage": 1, "msg": f"Collecting opinions (Round {round_num}, Mode: {config.mode})..."})
 
@@ -1901,6 +2101,8 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             emit({"type": "opinion_skip", "model": model_instance, "reason": "circuit_breaker_open"})
             if degradation:
                 degradation.record_model_unavailable(model_instance, "circuit_breaker_open")
+            if excluded_models is not None:
+                excluded_models.append({"model": model_instance, "round": round_num, "reason": "circuit_breaker_open", "status": "SKIPPED"})
             continue
 
         if base_model in ADAPTERS and check_cli_available(base_model):
@@ -1931,8 +2133,11 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             # Get persona title for logging (always from dynamic_persona now)
             persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-            # Use adaptive timeout if available, otherwise config timeout
-            model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode) if adaptive_timeout else config.timeout
+            # Use adaptive timeout if available, otherwise model-specific timeout, then config default
+            if adaptive_timeout:
+                model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode)
+            else:
+                model_timeout = MODEL_TIMEOUTS.get(base_model, config.timeout)
             model_timeouts.append(model_timeout)
 
             emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title, "timeout": model_timeout})
@@ -1942,6 +2147,8 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             emit({"type": "opinion_error", "model": model_instance, "error": "CLI not available", "status": "ABSTENTION"})
             if degradation:
                 degradation.record_model_unavailable(model_instance, "cli_not_available")
+            if excluded_models is not None:
+                excluded_models.append({"model": model_instance, "round": round_num, "reason": "cli_not_available", "status": "SKIPPED"})
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -1955,6 +2162,8 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             # Track failure in degradation state
             if degradation:
                 degradation.record_model_unavailable(model_instance, str(result))
+            if excluded_models is not None:
+                excluded_models.append({"model": model_instance, "round": round_num, "reason": str(result), "status": "FAILED"})
             if adaptive_timeout:
                 adaptive_timeout.record_latency(base_model, 0, success=False, mode=config.mode)
         else:
@@ -1971,6 +2180,8 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
                 emit({"type": "opinion_error", "model": model_instance, "error": result.error, "status": "ABSTENTION"})
                 if degradation:
                     degradation.record_model_unavailable(model_instance, result.error or "unknown_error")
+                if excluded_models is not None:
+                    excluded_models.append({"model": model_instance, "round": round_num, "reason": result.error or "unknown_error", "status": "FAILED"})
             responses[model_instance] = result
 
     # Emit degradation status if any models failed
@@ -2209,6 +2420,7 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
     # Track all rounds
     all_rounds = []
     deliberation_trail = []  # Detailed trail for --trail flag
+    excluded_models = []  # Track skipped/failed models for trail visibility
     previous_round_opinions = None
     converged = False
     convergence_score = 0.0
@@ -2221,7 +2433,7 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
         emit({"type": "round_start", "round": round_num, "max_rounds": config.max_rounds})
 
         # Stage 1: Gather opinions for this round (always include personas for trail)
-        gather_result = await gather_opinions(config, round_num=round_num, previous_round_opinions=previous_round_opinions, include_personas=True)
+        gather_result = await gather_opinions(config, round_num=round_num, previous_round_opinions=previous_round_opinions, include_personas=True, excluded_models=excluded_models)
 
         # Unpack responses and persona map
         if isinstance(gather_result, tuple):
@@ -2416,7 +2628,9 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
             duration_ms=duration_ms,
             converged=converged,
             convergence_score=convergence_score,
-            confidence=adjusted_confidence
+            confidence=adjusted_confidence,
+            excluded_models=excluded_models,
+            config_models=config.models
         )
 
         # Save to file
@@ -2424,6 +2638,7 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
             markdown_content=markdown_content,
             session_id=session_id,
             query=config.query,
+            mode=config.mode,
             output_dir="./council_trails"
         )
 
@@ -2618,8 +2833,11 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
         dynamic_persona = assigned_personas[idx] if idx < len(assigned_personas) else None
         persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-        # Use adaptive timeout if available
-        model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode) if adaptive_timeout else config.timeout
+        # Use adaptive timeout if available, otherwise model-specific timeout
+        if adaptive_timeout:
+            model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode)
+        else:
+            model_timeout = MODEL_TIMEOUTS.get(base_model, config.timeout)
 
         emit({"type": "vote_start", "model": model_instance, "persona": persona_title, "timeout": model_timeout})
 
@@ -3302,12 +3520,19 @@ def main():
         default=config_defaults.enable_trail,
         help='Include deliberation trail in output (who said what). Default comes from council.config.yaml (enable_trail). Use --no-trail to disable.'
     )
+    parser.add_argument(
+        '--human',
+        action='store_true',
+        default=False,
+        help='Human-readable output instead of JSON (recommended for interactive use)'
+    )
 
     args = parser.parse_args()
 
     # Apply instrumentation setting globally for this invocation (including --check)
-    global ENABLE_PERF_INSTRUMENTATION
+    global ENABLE_PERF_INSTRUMENTATION, HUMAN_OUTPUT
     ENABLE_PERF_INSTRUMENTATION = args.enable_perf_metrics
+    HUMAN_OUTPUT = args.human
 
     # ============================================================================
     # Setup Check Mode
