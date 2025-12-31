@@ -28,12 +28,15 @@ PERSONA_MANAGER = PersonaManager()
 SESSION_PERSONA_CACHE: dict[str, dict[str, List[Persona]]] = {}
 
 
-async def generate_personas_with_llm(query: str, num_models: int, chairman: str, mode: str = 'consensus', timeout: int = 60) -> List[Persona]:
+async def generate_personas_with_llm(query: str, num_models: int, chairman: str, mode: str = 'consensus', timeout: int = 60, round_num: int = 1) -> List[Persona]:
     """
     Generate optimal personas dynamically using LLM (Chairman).
 
     Instead of using hardcoded persona library, ask the Chairman to create
     the most relevant expert personas for this specific question and deliberation mode.
+
+    Personas are cached per session but ROTATED between rounds so each model
+    gets a different perspective across the deliberation.
 
     Args:
         query: The question to analyze
@@ -41,26 +44,32 @@ async def generate_personas_with_llm(query: str, num_models: int, chairman: str,
         chairman: Which model to use as Chairman (typically 'claude')
         mode: Deliberation mode (consensus, debate, devil_advocate, etc.)
         timeout: Timeout for LLM call
+        round_num: Current round number (used for persona rotation)
 
     Returns:
-        List of dynamically generated Persona objects
+        List of dynamically generated Persona objects (rotated by round)
     """
     metrics = get_metrics()
     session_id = get_current_session_id()
     cache_bucket = SESSION_PERSONA_CACHE.setdefault(session_id, {})
     cache_key = f"{mode}:{hashlib.sha256(query.encode('utf-8')).hexdigest()}"
 
-    # Cache hit - reuse personas from earlier round
+    # Cache hit - reuse personas from earlier round BUT ROTATE them
     if cache_key in cache_bucket:
         if metrics:
             metrics.record_persona_cache(True)
+        cached_personas = cache_bucket[cache_key]
+        # Rotate personas by (round_num - 1) positions so each round has different assignment
+        # Round 1: [A, B, C], Round 2: [B, C, A], Round 3: [C, A, B]
+        rotation = (round_num - 1) % len(cached_personas)
+        rotated = cached_personas[rotation:] + cached_personas[:rotation]
         return [
             Persona(
                 title=p.title,
                 role=p.role,
                 prompt_prefix=p.prompt_prefix,
                 specializations=list(p.specializations)
-            ) for p in cache_bucket[cache_key]
+            ) for p in rotated
         ]
 
     persona_start = time.time()

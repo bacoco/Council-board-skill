@@ -70,13 +70,14 @@ async def gather_opinions(
     degradation = get_degradation_state()
     adaptive_timeout = get_adaptive_timeout()
 
-    # Always generate personas dynamically for ALL modes via LLM (with caching)
+    # Always generate personas dynamically for ALL modes via LLM (with caching + rotation)
     assigned_personas = await generate_personas_with_llm(
         config.query,
         len(config.models),
         config.chairman,
         mode=config.mode,
-        timeout=30
+        timeout=30,
+        round_num=round_num  # Rotate personas between rounds
     )
 
     tasks = []
