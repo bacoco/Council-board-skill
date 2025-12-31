@@ -845,54 +845,35 @@ def get_available_models(requested_models: List[str]) -> List[str]:
 
 def expand_models_with_fallback(requested_models: List[str], min_models: int = 3) -> List[str]:
     """
-    Expand model list with fallback if some models are unavailable.
+    Get available models from requested list.
 
-    If fewer than min_models are available, duplicates available models
-    to ensure sufficient perspectives. Personas will be generated dynamically via LLM.
+    Does NOT duplicate models - duplicating the same CLI creates fake diversity,
+    triples API costs, and biases convergence (same model agrees with itself).
+    Instead, returns available models as-is and lets DegradationState apply
+    confidence penalties appropriately.
 
     Args:
         requested_models: List of requested model names
-        min_models: Minimum number of model instances required (default: 3)
+        min_models: Advisory minimum (used for warning only, not enforced here)
 
     Returns:
-        List of model instance IDs to use (may include duplicates like 'claude_instance_1')
+        List of available model names (no duplicates)
     """
     available = get_available_models(requested_models)
-
-    if len(available) >= min_models:
-        # All good - use available models as-is
-        return available
 
     if len(available) == 0:
         raise RuntimeError("No model CLIs are available. Please install and authenticate at least one of: claude, gemini, codex")
 
-    # Fallback: duplicate available models to reach min_models
-    emit({
-        'type': 'fallback_triggered',
-        'requested': requested_models,
-        'available': available,
-        'min_required': min_models,
-        'msg': f'Only {len(available)} model(s) available - expanding with LLM-generated diverse personas'
-    })
+    if len(available) < min_models:
+        # Warn about degraded operation - DegradationState will apply confidence penalty
+        emit({
+            'type': 'degraded_start',
+            'requested': requested_models,
+            'available': available,
+            'msg': f'Operating with {len(available)}/{min_models} models - confidence penalty will apply'
+        })
 
-    expanded_models = []
-
-    # Calculate how many instances we need per available model
-    instances_needed = min_models
-    instances_per_model = (instances_needed + len(available) - 1) // len(available)  # Ceiling division
-
-    for model in available:
-        for i in range(instances_per_model):
-            instance_id = f"{model}_instance_{i+1}"
-            expanded_models.append(instance_id)
-
-            if len(expanded_models) >= min_models:
-                break
-
-        if len(expanded_models) >= min_models:
-            break
-
-    return expanded_models[:min_models]
+    return available
 
 # Cache for project root (computed once per session)
 _PROJECT_ROOT_CACHE: Optional[Path] = None
@@ -1539,8 +1520,14 @@ def _emit_human(event: dict):
     """Format event as human-readable output."""
     event_type = event.get('type', '')
 
-    # Status messages
-    if event_type == 'status':
+    # Status messages - check specific cases first, then generic fallback
+    if event_type == 'status' and 'review' in event.get('msg', '').lower():
+        print(f"📝 Peer review in progress...", flush=True)
+
+    elif event_type == 'status' and 'synthesiz' in event.get('msg', '').lower():
+        print(f"🧠 Synthesizing final answer...", flush=True)
+
+    elif event_type == 'status':
         msg = event.get('msg', '')
         print(f"📋 {msg}", flush=True)
 
@@ -1552,6 +1539,11 @@ def _emit_human(event: dict):
 
     elif event_type == 'round_complete':
         print(f"   ✓ Round complete", flush=True)
+
+    # Degraded operation warning
+    elif event_type == 'degraded_start':
+        available = event.get('available', [])
+        print(f"⚠️  Degraded mode: {len(available)} model(s) available - confidence penalty applies", flush=True)
 
     # Persona generation
     elif event_type == 'persona_generation':
@@ -1581,13 +1573,6 @@ def _emit_human(event: dict):
         model = event.get('model', 'unknown')
         reason = event.get('reason', 'unknown')
         print(f"   ⏭️  {model.upper()} skipped: {reason}", flush=True)
-
-    # Peer review and synthesis
-    elif event_type == 'status' and 'review' in event.get('msg', '').lower():
-        print(f"📝 Peer review in progress...", flush=True)
-
-    elif event_type == 'status' and 'synthesiz' in event.get('msg', '').lower():
-        print(f"🧠 Synthesizing final answer...", flush=True)
 
     # Trail saved
     elif event_type == 'trail_saved':
@@ -2181,7 +2166,9 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             # Get persona title for logging (always from dynamic_persona now)
             persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-            # Simple fixed timeout - no adaptive complexity
+            # Fixed timeout intentionally kept (not adaptive) - Codex requires 3-4 min
+            # for code exploration with tools. AdaptiveTimeout caused premature timeouts.
+            # All models share same timeout since they run in parallel (wait = slowest).
             model_timeout = MODEL_TIMEOUT
             model_timeouts.append(model_timeout)
 
@@ -2878,7 +2865,7 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
         dynamic_persona = assigned_personas[idx] if idx < len(assigned_personas) else None
         persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-        # Simple fixed timeout
+        # Fixed timeout intentionally kept - see gather_opinions() for rationale
         model_timeout = MODEL_TIMEOUT
 
         emit({"type": "vote_start", "model": model_instance, "persona": persona_title, "timeout": model_timeout})
@@ -3546,7 +3533,8 @@ def main():
     parser.add_argument('--models', default='claude,gemini,codex', help='Comma-separated model list')
     parser.add_argument('--chairman', default='claude', help='Synthesizer model')
     parser.add_argument('--timeout', type=int, default=config_defaults.timeout, help='Per-model timeout (seconds)')
-    parser.add_argument('--anonymize', type=bool, default=True, help='Anonymize responses')
+    parser.add_argument('--anonymize', action=argparse.BooleanOptionalAction, default=True,
+                        help='Anonymize responses (use --no-anonymize to disable)')
     parser.add_argument('--budget', default='balanced', choices=['fast', 'balanced', 'thorough'])
     parser.add_argument('--output', default='standard', choices=['minimal', 'standard', 'audit'])
     parser.add_argument('--max-rounds', type=int, default=config_defaults.max_rounds, help='Max rounds for deliberation')
