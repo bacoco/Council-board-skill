@@ -3693,18 +3693,10 @@ def main():
         context=context,  # Use loaded context
         max_rounds=args.max_rounds,
         timeout=args.timeout,
-        strict=False  # Sanitize and continue (strict=True would fail on violations)
+        strict=True  # SECURITY: Block injection attempts, don't just warn
     )
 
-    # Emit validation warnings if any violations found
-    if validation['violations']:
-        emit({
-            'type': 'validation_warnings',
-            'violations': validation['violations'],
-            'redacted_secrets': validation['redacted_secrets']
-        })
-
-    # Fail if query is invalid
+    # Fail if query contains injection patterns
     if not validation['is_valid']:
         emit({
             'type': 'error',
@@ -3712,6 +3704,13 @@ def main():
             'violations': validation['violations']
         })
         sys.exit(1)
+
+    # Emit any redacted secrets as info
+    if validation['redacted_secrets']:
+        emit({
+            'type': 'info',
+            'msg': f"Redacted {len(validation['redacted_secrets'])} secrets from context"
+        })
 
     # Apply fallback for unavailable models
     requested_models = args.models.split(',')

@@ -112,16 +112,12 @@ class InputValidator:
 
         Args:
             query: User-provided query string
-            strict: If True, fail on any suspicious pattern. If False, sanitize and continue.
+            strict: If True, fail immediately on any suspicious pattern.
+                    If False, continue checking all patterns before returning.
 
         Returns:
-            ValidationResult with sanitized query and violations list
-
-        Behavior:
-            - strict=True: Any violation returns is_valid=False immediately
-            - strict=False: Violations are recorded as warnings, but is_valid=True
-              as long as input was sanitized successfully (allows benign queries
-              that happen to contain shell operators like '|' in text)
+            ValidationResult with sanitized query and violations list.
+            is_valid=False if any violations detected (regardless of strict mode).
         """
         violations = []
 
@@ -155,10 +151,8 @@ class InputValidator:
         # Instead, we just detect and warn.
         sanitized = query
 
-        # With strict=False, is_valid=True even with violations (they're just warnings)
-        # With strict=True, we already returned False above on any violation
         return ValidationResult(
-            is_valid=True,  # If we got here, input is usable (violations are warnings)
+            is_valid=len(violations) == 0,
             sanitized_input=sanitized,
             violations=violations
         )
