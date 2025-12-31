@@ -224,3 +224,15 @@ min_quorum: 2
 - `references/failure-modes.md` - Error handling and recovery
 - `references/output-format.md` - Response templates
 - `references/examples.md` - Detailed usage examples
+
+## Known Limitations / Technical Debt
+
+The following issues are documented for future improvement:
+
+| Issue | Severity | Description |
+|-------|----------|-------------|
+| `sys.path.insert()` usage | Medium | Multiple files use `sys.path.insert(0, ...)` for imports. Proper fix requires packaging refactor with `pyproject.toml`. Functional but non-idiomatic. |
+| `gather_opinions` location | Low | Shared by all modes but lives in `modes/consensus.py`. Should be in `core/` as infrastructure. |
+| `run_council` size | Low | ~345 lines handling multiple concerns. Could be refactored into phase functions for maintainability. |
+
+These are non-blocking issues that don't affect functionality or security.

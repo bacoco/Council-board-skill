@@ -7,6 +7,7 @@ Contains:
 - AdaptiveTimeout: Dynamic timeout based on performance history
 """
 
+import threading
 import time
 from typing import List, Optional, Tuple
 
@@ -401,24 +402,34 @@ class AdaptiveTimeout:
         return stats
 
 
-# Global instances
+# Global instances with thread-safe access
+# Note: These globals are session-scoped. For true concurrent sessions,
+# consider passing state explicitly or using context variables.
+_STATE_LOCK = threading.Lock()
 DEGRADATION_STATE: Optional[DegradationState] = None
 ADAPTIVE_TIMEOUT: Optional[AdaptiveTimeout] = None
 
 
 def init_degradation(expected_models: List[str], base_timeout: int = DEFAULT_TIMEOUT, min_quorum: int = DEFAULT_MIN_QUORUM) -> Tuple[DegradationState, AdaptiveTimeout]:
-    """Initialize degradation tracking for a new session."""
+    """
+    Initialize degradation tracking for a new session.
+
+    Thread-safe: Uses lock to prevent race conditions during initialization.
+    """
     global DEGRADATION_STATE, ADAPTIVE_TIMEOUT
-    DEGRADATION_STATE = DegradationState(expected_models, min_quorum=min_quorum)
-    ADAPTIVE_TIMEOUT = AdaptiveTimeout(base_timeout)
-    return DEGRADATION_STATE, ADAPTIVE_TIMEOUT
+    with _STATE_LOCK:
+        DEGRADATION_STATE = DegradationState(expected_models, min_quorum=min_quorum)
+        ADAPTIVE_TIMEOUT = AdaptiveTimeout(base_timeout)
+        return DEGRADATION_STATE, ADAPTIVE_TIMEOUT
 
 
 def get_degradation_state() -> Optional[DegradationState]:
-    """Get current degradation state."""
-    return DEGRADATION_STATE
+    """Get current degradation state (thread-safe read)."""
+    with _STATE_LOCK:
+        return DEGRADATION_STATE
 
 
 def get_adaptive_timeout() -> Optional[AdaptiveTimeout]:
-    """Get current adaptive timeout manager."""
-    return ADAPTIVE_TIMEOUT
+    """Get current adaptive timeout manager (thread-safe read)."""
+    with _STATE_LOCK:
+        return ADAPTIVE_TIMEOUT

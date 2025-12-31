@@ -275,7 +275,13 @@ def save_trail_to_file(
     filename = f"council_{date_str}_{time_str}_{mode}_{slug}.md"
     filepath = output_path / filename
 
-    # Write file
-    filepath.write_text(markdown_content, encoding='utf-8')
+    # Write file with error handling for constrained filesystems
+    try:
+        filepath.write_text(markdown_content, encoding='utf-8')
+    except OSError as e:
+        # Re-raise with more context for debugging
+        raise OSError(f"Failed to write trail file to {filepath}: {e}") from e
+    except PermissionError as e:
+        raise PermissionError(f"Permission denied writing trail file to {filepath}: {e}") from e
 
     return filepath

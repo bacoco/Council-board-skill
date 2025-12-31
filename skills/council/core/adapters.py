@@ -23,6 +23,27 @@ if TYPE_CHECKING:
     from .models import SessionConfig
 
 
+def _cleanup_subprocess(proc) -> None:
+    """
+    Safely cleanup a subprocess by closing pipes and killing the process.
+
+    Closes stdin/stdout/stderr first to prevent event loop warnings,
+    then kills the process. Silently ignores any errors during cleanup.
+    """
+    if proc is None:
+        return
+    try:
+        if proc.stdin:
+            proc.stdin.close()
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stderr:
+            proc.stderr.close()
+        proc.kill()
+    except Exception:
+        pass  # Cleanup errors are non-fatal
+
+
 # Cache for project root (computed once per session)
 _PROJECT_ROOT_CACHE: Optional[Path] = None
 
@@ -222,18 +243,7 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
 
     except asyncio.TimeoutError:
         latency = int((time.time() - start) * 1000)
-        # Clean up subprocess on timeout - close pipes first to prevent event loop warnings
-        if proc is not None:
-            try:
-                if proc.stdin:
-                    proc.stdin.close()
-                if proc.stdout:
-                    proc.stdout.close()
-                if proc.stderr:
-                    proc.stderr.close()
-                proc.kill()
-            except Exception:
-                pass
+        _cleanup_subprocess(proc)
         return LLMResponse(
             content='',
             model=model_name,
@@ -243,18 +253,7 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
         )
     except Exception as e:
         latency = int((time.time() - start) * 1000)
-        # Clean up subprocess on error - close pipes first to prevent event loop warnings
-        if proc is not None:
-            try:
-                if proc.stdin:
-                    proc.stdin.close()
-                if proc.stdout:
-                    proc.stdout.close()
-                if proc.stderr:
-                    proc.stderr.close()
-                proc.kill()
-            except Exception:
-                pass
+        _cleanup_subprocess(proc)
         return LLMResponse(
             content='',
             model=model_name,
