@@ -6,71 +6,11 @@ Council orchestrates Claude, Gemini, and Codex to debate, challenge, and synthes
 
 ---
 
-### 🎯 Collective Intelligence, Amplified.
-
-> You code alone. You decide alone. You doubt alone.
-> **What if three AI minds deliberated before you commit?**
-
-**Three models. Dynamic personas. One clear answer.**
-
-**For Developers:**
-- Pressure-test architecture, APIs, and stack decisions in minutes
-- Devil's Advocate mode exposes blind spots before your PR does
-- Anonymous peer review: candid critique, ego intact
-
-**For Decision Makers:**
-- Consensus detected = instant green light
-- Full audit trail: every decision justified and shareable
-- 2-hour debates become 10-minute decisions
-
-*Debate mode stress-tests. Consensus mode synthesizes.*
-*Personas adapt dynamically to your specific query—no scripting, no setup.*
-
-**Doubt drags. Collective clarity ships.**
-
-```bash
-/council "Microservices or monolith?"  # → Clear verdict in ~2 min
-```
-
----
-
-## Inspired By
-
-> *"LLM Council works together to answer your hardest questions"*
-> — [Andrej Karpathy](https://github.com/karpathy/llm-council)
-
-This project extends Karpathy's [LLM Council](https://github.com/karpathy/llm-council) concept with:
-- **Dynamic persona generation** — AI-generated expert roles tailored to each question
-- **Multi-round deliberation** — Models see each other's arguments and provide rebuttals
-- **Automatic escalation** — Consensus → Debate → Devil's Advocate based on convergence
-- **Claude Code integration** — Works as a native skill, not a separate web app
-
-## See It In Action
-
-```
-Council Deliberation: Microservices vs Monolith for Startups
-
-Personas: The Velocity Optimizer, The Complexity Cartographer, The Scale Prophet
-Rounds: 2 (converged)
-Confidence: 0.89
-
-Consensus:
-For early-stage startups (<15 engineers), start with a modular monolith.
-Extract services only when you have evidence of scaling bottlenecks.
-
-Dissenting View:
-The Scale Prophet notes that certain compliance requirements
-(HIPAA, PCI) may justify early service boundaries.
-```
-*~2 minutes for complex questions*
-
 ## Quick Start
 
 ```bash
-# Add the marketplace (one time)
-claude plugin marketplace add bacoco/Council-board-skill
-
 # Install the plugin
+claude plugin marketplace add bacoco/Council-board-skill
 claude plugin install council@council-board
 
 # Verify setup
@@ -82,83 +22,6 @@ Then just ask:
 "Ask the council: Should we use microservices?"
 ```
 
-## Advanced Usage
-
-### Deliberation Trail (`--trail`)
-
-**Enabled by default.** Saves the full deliberation process to a Markdown file for complete transparency.
-
-```bash
-python3 skills/council/scripts/council.py --query "Your question"
-```
-
-JSON output includes a clickable path to the trail file:
-```json
-{
-  "answer": "The council recommends...",
-  "confidence": 0.92,
-  "trail_file": "./council_trails/council_2025-12-31T143052_your-question.md",
-  "trail_metadata": {
-    "total_rounds": 2,
-    "participants": 3,
-    "total_contributions": 6,
-    "consensus_reached": true
-  }
-}
-```
-
-The Markdown file contains the complete reasoning chain:
-- Session metadata (timestamp, duration, mode, convergence)
-- Full query
-- Each round with all model contributions (persona, role, full answer, key points, confidence, latency)
-- Devil's advocate analysis (if triggered)
-- Peer review scores
-- Final synthesis with dissenting views
-
-**Click the path in your terminal to open the file and review the full deliberation.**
-
-Disable with `--no-trail` to skip trail generation.
-
-### Performance Metrics (`--enable-perf-metrics`)
-
-Disabled by default. Emits latency data per stage.
-
-```bash
-python3 skills/council/scripts/council.py --enable-perf-metrics --query "Your question"
-```
-
-### Configuration
-
-All flags can be set persistently in [`skills/council/council.config.yaml`](skills/council/council.config.yaml):
-
-```yaml
-enable_trail: true          # Save trail to Markdown file (default: true)
-enable_perf_metrics: false  # Show performance metrics (default: false)
-```
-
-<details>
-<summary>Prerequisites - CLI Installation</summary>
-
-**Claude CLI** (requires Claude Pro/Max subscription):
-```bash
-npm install -g @anthropic-ai/claude-code
-claude auth login
-```
-
-**Gemini CLI**:
-```bash
-npm install -g @anthropic-ai/gemini-cli
-gemini auth login
-```
-
-**Codex CLI**:
-```bash
-npm install -g @openai/codex
-codex auth
-```
-
-</details>
-
 ## Example Phrases
 
 | What you say | What happens |
@@ -168,161 +31,71 @@ codex auth
 | "Challenge my design: [proposal]" | Red Team attacks, Blue Team defends |
 | "Peer review this code" | Security, architecture, performance review |
 
-## Why This Beats Single-Model Answers
+## Modes
 
-**Pressure-tested answers** — Models don't just answer once. They see each other's arguments and provide rebuttals. Like a real debate.
+| Mode | Use For |
+|------|---------|
+| `consensus` | Technical questions, design decisions |
+| `debate` | Controversial topics, binary choices |
+| `devil_advocate` | Stress-testing, security reviews |
+| `vote` | Multiple choice decisions |
 
-**Structured disagreement** — When models disagree, it automatically escalates to adversarial review. Disagreement is surfaced, not hidden.
+## Why This Works
 
-**Knows when to stop** — Stops early when models agree. Continues when they don't. You see the confidence score.
+- **Multi-round deliberation** — Models see each other's arguments and provide rebuttals
+- **Convergence detection** — Stops early when models agree, continues when they don't
+- **Confidence scoring** — You see how confident the synthesis is
 
 ## No API Keys Needed
 
-Uses your existing `claude`, `gemini`, and `codex` CLI subscriptions. No separate API costs — just your regular CLI usage.
+Uses your existing `claude`, `gemini`, and `codex` CLI subscriptions.
 
 <details>
-<summary>Dynamic Personas — Council Self-Analysis</summary>
+<summary>CLI Installation</summary>
 
-Council **automatically generates personas tailored to your question**.
+```bash
+# Claude CLI
+npm install -g @anthropic-ai/claude-code && claude auth login
 
-Example personas generated for "How to secure a payment API?":
-- *The Cryptography Sentinel* — encryption and key management
-- *The Compliance Navigator* — PCI-DSS and regulatory requirements
-- *The Attack Surface Cartographer* — threat modeling and vulnerabilities
+# Gemini CLI
+npm install -g @anthropic-ai/gemini-cli && gemini auth login
 
-### We Asked the Council About Itself
-
-**Question**: *"Are creative persona names like 'The Cryptography Sentinel' or 'The Latency Hunter' relevant for generating out-of-the-box thinking? Or is it just superficial marketing?"*
-
-**Council Verdict** (Convergence: 0.834):
-
-> Creative persona names are **neither superficial marketing nor cognitive magic — they're an effective prompt configuration tool**.
-
-**Three levels of real impact:**
-
-1. **Cognitive framing (real but moderate)** — "Hunter" invokes tracking, prey, patience — metaphors that color reasoning differently than "Engineer". The effect operates on style and focus, not fundamental logical structure.
-
-2. **Multi-agent differentiation (crucial)** — Generic names ("Expert 1", "Analyst 2") create gravitational pull toward convergent outputs. Distinctive names maintain separation of reasoning threads and **expand the perceived search space**.
-
-3. **Human reception (measurable)** — Creative labels increase perceived confidence, engagement, and willingness to consider divergent views — even when underlying content is equivalent.
-
-**Dissent (Codex)**: *Without rigorous comparative data, attributing effects to creative names remains post-hoc rationalization. The "cognitive priming" analogy is potentially anthropomorphic.*
-
-**Nuanced conclusion**: Marginal utility of creative names decreases sharply when behavioral specifications are already robust. Their power is maximal in under-specified contexts where the model must fill inferential gaps.
-
+# Codex CLI
+npm install -g @openai/codex && codex auth
+```
 </details>
 
-<details>
-<summary>Resilience</summary>
-
-Council keeps working even when models fail:
-- **2 models available**: Continues with 10% confidence penalty
-- **Model keeps failing**: Automatically excluded (circuit breaker)
-- **Slow model**: Timeout adapts based on history
-
-</details>
-
-## Full Transcript Example
-
-Real deliberation on a coding question with actual timings:
-
-<details>
-<summary>Question: "Python async scraper hitting rate limits — backoff, semaphore, or queue?"</summary>
+## Sample Output
 
 ```
-╔══════════════════════════════════════════════════════════════╗
-║              COUNCIL SETUP VALIDATION                        ║
-╠══════════════════════════════════════════════════════════════╣
-║  ✓ claude   │ 2.0.76 (Claude Code)                          ║
-║  ✓ gemini   │ 0.16.0                                        ║
-║  ✓ codex    │ codex-cli 0.72.0                              ║
-╠══════════════════════════════════════════════════════════════╣
-║  STATUS: All CLIs ready ✓                                    ║
-╚══════════════════════════════════════════════════════════════╝
+Council Deliberation: Microservices vs Monolith for Startups
 
-Session: council-1767103092
-Mode: consensus | Max rounds: 2
+Rounds: 2 (converged)
+Confidence: 0.89
 
-ROUND 1 - Initial Positions
-├─ Personas: The Backpressure Alchemist, Guardian of the Semaphore Gates, The Queue Architect
-├─ Claude (28.6s) ✓
-├─ Gemini (38.1s) ✓
-└─ Codex (10.0s) ✓
+Consensus:
+For early-stage startups (<15 engineers), start with a modular monolith.
+Extract services only when you have evidence of scaling bottlenecks.
 
-ROUND 2 - Rebuttals
-├─ Personas: The Throttle Alchemist, Oracle of the Semaphore Gates, The Queue Architect
-├─ Claude (31.8s) ✓
-├─ Gemini (38.0s) ✓
-└─ Codex (11.1s) ✓
-└─ Convergence: 0.926 ✓
-
-PEER REVIEW
-├─ The Throttle Alchemist: 16/20
-├─ Oracle of the Semaphore Gates: 18/20
-└─ The Queue Architect: 20/20
-
-SYNTHESIS (31.8s)
-├─ Confidence: 0.91
-└─ Contradictions resolved: 3
-
-TOTAL: 168.6s (~2.8 min)
-
-═══════════════════════════════════════════════════════════════
-
-VERDICT: Use all three in a layered architecture.
-
-Your question presents a false trichotomy — at 10,000 URLs/hour
-(~2.8 req/sec), you need a hybrid approach:
-
-1. Queue-Based Foundation (asyncio.Queue)
-2. Per-Host Semaphores (NOT global!)
-3. Token Bucket Rate Limiting (~2.5 req/sec)
-4. Exponential Backoff with Jitter
-5. Adaptive Tuning
-
-Implementation Priority:
-Queue → Per-host Semaphores → Token Bucket → Backoff → Adaptive
-
-DISSENT: Participant A argued semaphores should be primary,
-queue adds unnecessary complexity. Overruled: at 10k URLs/hour,
-queues provide essential operational benefits.
+Dissenting View:
+Certain compliance requirements (HIPAA, PCI) may justify early service boundaries.
 ```
-
-</details>
 
 ## Documentation
 
-**→ [skills/council/SKILL.md](skills/council/SKILL.md)** — Full technical documentation
-
-**→ [skills/council/council.config.yaml](skills/council/council.config.yaml)** — Configuration template
+**[skills/council/SKILL.md](skills/council/SKILL.md)** — Full usage documentation
 
 Reference guides in `skills/council/references/`:
-- `modes.md` — Deliberation modes (consensus, debate, devil_advocate)
-- `failure-modes.md` — Error handling, timeouts, recovery
-- `resilience.md` — Graceful degradation, circuit breaker
-- `security.md` — Input validation, secret redaction
-- `examples.md` — Usage examples
+- `modes.md` — Deliberation modes
+- `security.md` — Input validation
+- `resilience.md` — Graceful degradation
 
 ## Recent Improvements
 
-Fixes from Council self-review (convergence: 0.926, confidence: 91%):
-
-- [x] **Trail IO Error Handling** — Added try/except around file writes for constrained filesystems
-- [x] **Thread-Safe State** — Added threading locks to prevent race conditions in global state
-- [x] **Subprocess Cleanup** — Factored duplicate cleanup code into `_cleanup_subprocess()` helper
-- [x] **Documentation** — Added "Known Limitations" section to SKILL.md
-
-## Roadmap
-
-Future improvements identified by Council self-evaluation:
-
-- [ ] **Core Logic Tests** — Unit tests for deliberation engine, convergence algorithm, persona generation
-- [ ] **Persistent State** — Save circuit breaker state, metrics, adaptive timeouts across sessions (JSON/SQLite)
-- [ ] **Direct API Providers** — Bypass CLI fragility with native API implementations
-- [ ] **CI/CD Pipeline** — GitHub Actions, automated testing, version compatibility matrix
-- [ ] **Benchmarks** — Compare output quality/cost/latency vs single-model baselines
-- [ ] **Health Checks** — Endpoints for container orchestration, graceful SIGTERM handling
-- [ ] **Package Structure** — Replace sys.path.insert() with proper relative imports
+- [x] Trail IO error handling for constrained filesystems
+- [x] Thread-safe global state access
+- [x] Subprocess cleanup helper
+- [x] SOTA skill best practices (progressive disclosure)
 
 ## License
 
@@ -330,4 +103,4 @@ MIT - [LICENSE](LICENSE)
 
 ---
 
-*Inspired by [Andrej Karpathy's LLM Council](https://github.com/karpathy/llm-council). Research support: [MIT "Debating LLMs" study (2024)](https://venturebeat.com/ai/a-weekend-vibe-code-hack-by-andrej-karpathy-quietly-sketches-the-missing) found that models produce more accurate results when prompted to critique each other's outputs.*
+*Inspired by [Andrej Karpathy's LLM Council](https://github.com/karpathy/llm-council).*
