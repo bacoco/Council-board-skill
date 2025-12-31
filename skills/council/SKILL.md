@@ -207,7 +207,7 @@ Council can be configured via `council.config.yaml`:
 ```yaml
 providers: [claude, gemini, codex]
 chairman: claude
-timeout: 60
+timeout: 420  # 7 minutes - Codex needs time for code exploration
 max_rounds: 3
 mode: adaptive
 convergence_threshold: 0.8
