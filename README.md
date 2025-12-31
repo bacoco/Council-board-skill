@@ -88,17 +88,14 @@ Then just ask:
 
 Choose how the AI models work together:
 
-| Mode | Best For | What Happens |
-|------|----------|--------------|
-| **Consensus** | Technical questions, decisions | Models discuss until they agree |
-| **Debate** | Controversial topics | One argues FOR, one AGAINST |
-| **Devil's Advocate** | Testing ideas, security reviews | One model actively challenges |
-| **Vote** | Multiple choice decisions | Each model votes with justification |
+| Mode | Best For | What Happens | Example |
+|------|----------|--------------|---------|
+| **Consensus** ⭐ | Technical questions, decisions | Models discuss until they agree | *"Ask the council: should we use PostgreSQL?"* |
+| **Debate** | Controversial topics | One argues FOR, one AGAINST | *"Debate this: React vs Vue"* |
+| **Devil's Advocate** | Testing ideas, security reviews | One model actively challenges | *"Challenge my design for login"* |
+| **Vote** | Multiple choice decisions | Each model votes with justification | *"Vote on: AWS vs Azure vs GCP"* |
 
-Just say what you need:
-- *"Debate this: should we use React or Vue?"*
-- *"Challenge my design for a login system"*
-- *"Vote on: AWS vs Azure vs GCP"*
+⭐ **Default mode**: If you just say *"Ask the council: [question]"*, it uses **Consensus** mode automatically.
 
 ### 📋 Full Reasoning Trail
 
