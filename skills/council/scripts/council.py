@@ -936,6 +936,7 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
         LLMResponse with content, latency, and success status
     """
     start = time.time()
+    proc = None  # Track subprocess for cleanup on timeout/error
 
     try:
         # Build command
@@ -999,6 +1000,13 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
 
     except asyncio.TimeoutError:
         latency = int((time.time() - start) * 1000)
+        # Kill zombie subprocess on timeout
+        if proc is not None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass  # Process may already be dead
         return LLMResponse(
             content='',
             model=model_name,
@@ -1008,6 +1016,13 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
         )
     except Exception as e:
         latency = int((time.time() - start) * 1000)
+        # Kill zombie subprocess on error
+        if proc is not None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass  # Process may already be dead
         return LLMResponse(
             content='',
             model=model_name,
