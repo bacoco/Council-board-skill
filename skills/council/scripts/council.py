@@ -1000,13 +1000,18 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
 
     except asyncio.TimeoutError:
         latency = int((time.time() - start) * 1000)
-        # Kill zombie subprocess on timeout
+        # Clean up subprocess on timeout - close pipes first to prevent event loop warnings
         if proc is not None:
             try:
+                if proc.stdin:
+                    proc.stdin.close()
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
                 proc.kill()
-                await proc.wait()
             except Exception:
-                pass  # Process may already be dead
+                pass
         return LLMResponse(
             content='',
             model=model_name,
@@ -1016,13 +1021,18 @@ async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout
         )
     except Exception as e:
         latency = int((time.time() - start) * 1000)
-        # Kill zombie subprocess on error
+        # Clean up subprocess on error - close pipes first to prevent event loop warnings
         if proc is not None:
             try:
+                if proc.stdin:
+                    proc.stdin.close()
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
                 proc.kill()
-                await proc.wait()
             except Exception:
-                pass  # Process may already be dead
+                pass
         return LLMResponse(
             content='',
             model=model_name,
