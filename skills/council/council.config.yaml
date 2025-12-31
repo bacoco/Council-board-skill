@@ -11,7 +11,8 @@ providers:
 chairman: claude
 
 # Timeout per model query (seconds)
-timeout: 60
+# 420s (7 min) needed for Codex code exploration
+timeout: 420
 
 # Maximum deliberation rounds before forcing synthesis
 max_rounds: 3

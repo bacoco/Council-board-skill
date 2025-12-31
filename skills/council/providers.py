@@ -309,5 +309,5 @@ class CouncilConfig:
 
     @classmethod
     def default_path(cls) -> Path:
-        """Get default config file path."""
-        return Path(__file__).parent.parent / 'council.config.yaml'
+        """Get default config file path (same directory as providers.py)."""
+        return Path(__file__).parent / 'council.config.yaml'

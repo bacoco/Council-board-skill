@@ -3545,11 +3545,11 @@ def main():
                        choices=['adaptive', 'consensus', 'debate', 'vote', 'devil_advocate'])
     parser.add_argument('--models', default='claude,gemini,codex', help='Comma-separated model list')
     parser.add_argument('--chairman', default='claude', help='Synthesizer model')
-    parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT, help='Per-model timeout (seconds)')
+    parser.add_argument('--timeout', type=int, default=config_defaults.timeout, help='Per-model timeout (seconds)')
     parser.add_argument('--anonymize', type=bool, default=True, help='Anonymize responses')
     parser.add_argument('--budget', default='balanced', choices=['fast', 'balanced', 'thorough'])
     parser.add_argument('--output', default='standard', choices=['minimal', 'standard', 'audit'])
-    parser.add_argument('--max-rounds', type=int, default=3, help='Max rounds for deliberation')
+    parser.add_argument('--max-rounds', type=int, default=config_defaults.max_rounds, help='Max rounds for deliberation')
     parser.add_argument(
         '--enable-perf-metrics',
         action=argparse.BooleanOptionalAction,
