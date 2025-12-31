@@ -86,27 +86,18 @@ Then just ask:
 
 ### Deliberation Trail (`--trail`)
 
-**Enabled by default.** Shows who said what at each round — full transparency into the deliberation process.
+**Enabled by default.** Saves the full deliberation process to a Markdown file for complete transparency.
 
 ```bash
-python3 skills/council/scripts/council.py --query "Your question" --trail
+python3 skills/council/scripts/council.py --query "Your question"
 ```
 
-Output includes:
+JSON output includes a clickable path to the trail file:
 ```json
 {
-  "deliberation_trail": [
-    {
-      "round": 1,
-      "model": "claude",
-      "persona": "The Type Guardian",
-      "persona_role": "Evaluates type safety and maintainability",
-      "answer": "TypeScript is recommended because...",
-      "key_points": ["Type safety", "IDE support", "Refactoring"],
-      "confidence": 0.92,
-      "latency_ms": 23489
-    }
-  ],
+  "answer": "The council recommends...",
+  "confidence": 0.92,
+  "trail_file": "./council_trails/council_2025-12-31T143052_your-question.md",
   "trail_metadata": {
     "total_rounds": 2,
     "participants": 3,
@@ -116,7 +107,17 @@ Output includes:
 }
 ```
 
-Disable with `--no-trail` or set `enable_trail: false` in config.
+The Markdown file contains the complete reasoning chain:
+- Session metadata (timestamp, duration, mode, convergence)
+- Full query
+- Each round with all model contributions (persona, role, full answer, key points, confidence, latency)
+- Devil's advocate analysis (if triggered)
+- Peer review scores
+- Final synthesis with dissenting views
+
+**Click the path in your terminal to open the file and review the full deliberation.**
+
+Disable with `--no-trail` to skip trail generation.
 
 ### Performance Metrics (`--enable-perf-metrics`)
 
@@ -131,7 +132,7 @@ python3 skills/council/scripts/council.py --enable-perf-metrics --query "Your qu
 All flags can be set persistently in [`skills/council/council.config.yaml`](skills/council/council.config.yaml):
 
 ```yaml
-enable_trail: true          # Show deliberation trail (default: true)
+enable_trail: true          # Save trail to Markdown file (default: true)
 enable_perf_metrics: false  # Show performance metrics (default: false)
 ```
 

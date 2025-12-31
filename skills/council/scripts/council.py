@@ -1438,6 +1438,219 @@ def emit_perf_metrics(summary: dict):
         "aggregate_model_latency": summary.get("aggregate_model_latency", {}),
     })
 
+
+# ============================================================================
+# Trail Markdown File Generation
+# ============================================================================
+
+def generate_trail_markdown(
+    session_id: str,
+    query: str,
+    mode: str,
+    deliberation_trail: List[dict],
+    synthesis: dict,
+    review: dict,
+    devils_advocate_summary: Optional[dict],
+    duration_ms: int,
+    converged: bool,
+    convergence_score: float,
+    confidence: float
+) -> str:
+    """
+    Generate a human-readable Markdown document from the deliberation trail.
+
+    Returns:
+        Formatted Markdown string with full reasoning chain
+    """
+    lines = []
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Header
+    lines.append("# Council Deliberation Trail")
+    lines.append("")
+    lines.append("## Session Metadata")
+    lines.append("")
+    lines.append(f"- **Session ID**: `{session_id}`")
+    lines.append(f"- **Timestamp**: {timestamp}")
+    lines.append(f"- **Duration**: {duration_ms / 1000:.1f}s")
+    lines.append(f"- **Mode**: {mode}")
+    lines.append(f"- **Converged**: {'Yes' if converged else 'No'} (score: {convergence_score:.3f})")
+    lines.append(f"- **Final Confidence**: {confidence:.2f}")
+    lines.append("")
+    lines.append("## Query")
+    lines.append("")
+    lines.append(f"> {query}")
+    lines.append("")
+
+    # Group trail entries by round
+    rounds_data = {}
+    for entry in deliberation_trail:
+        round_num = entry["round"]
+        if round_num not in rounds_data:
+            rounds_data[round_num] = []
+        rounds_data[round_num].append(entry)
+
+    # Deliberation Rounds
+    lines.append("---")
+    lines.append("")
+    lines.append("## Deliberation Rounds")
+    lines.append("")
+
+    for round_num in sorted(rounds_data.keys()):
+        lines.append(f"### Round {round_num}")
+        lines.append("")
+
+        for entry in rounds_data[round_num]:
+            persona = entry.get("persona", entry.get("model", "Unknown"))
+            role = entry.get("persona_role", "")
+            conf = entry.get("confidence", 0.0)
+            latency = entry.get("latency_ms", 0)
+            answer = entry.get("answer", "")
+            key_points = entry.get("key_points", [])
+            model = entry.get("model", "")
+
+            lines.append(f"#### {persona}")
+            lines.append(f"*Model: {model}*")
+            if role:
+                lines.append(f"*{role}*")
+            lines.append("")
+            lines.append(f"**Confidence**: {conf:.2f} | **Latency**: {latency}ms")
+            lines.append("")
+
+            # Answer
+            lines.append("**Response**:")
+            lines.append("")
+            lines.append(answer)
+            lines.append("")
+
+            # Key Points
+            if key_points:
+                lines.append("**Key Points**:")
+                for point in key_points:
+                    lines.append(f"- {point}")
+                lines.append("")
+
+            lines.append("---")
+            lines.append("")
+
+    # Devil's Advocate Summary (if present)
+    if devils_advocate_summary:
+        lines.append("## Devil's Advocate Analysis")
+        lines.append("")
+
+        attackers = devils_advocate_summary.get("attacker", [])
+        defenders = devils_advocate_summary.get("defender", [])
+        synthesizers = devils_advocate_summary.get("synthesizer", [])
+        takeaways = devils_advocate_summary.get("headline_takeaways", [])
+
+        if attackers:
+            lines.append("### Red Team (Attacker)")
+            for point in attackers:
+                lines.append(f"- {point}")
+            lines.append("")
+
+        if defenders:
+            lines.append("### Blue Team (Defender)")
+            for point in defenders:
+                lines.append(f"- {point}")
+            lines.append("")
+
+        if synthesizers:
+            lines.append("### Purple Team (Synthesizer)")
+            for point in synthesizers:
+                lines.append(f"- {point}")
+            lines.append("")
+
+        if takeaways:
+            lines.append("### Key Takeaways")
+            for point in takeaways:
+                lines.append(f"- {point}")
+            lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+    # Peer Review Scores
+    if review and isinstance(review, dict):
+        scores = review.get("scores", review)
+        if scores:
+            lines.append("## Peer Review Scores")
+            lines.append("")
+            lines.append("| Participant | Accuracy | Completeness | Reasoning | Clarity | Total |")
+            lines.append("|-------------|----------|--------------|-----------|---------|-------|")
+            for participant, score_data in scores.items():
+                if isinstance(score_data, dict):
+                    acc = score_data.get("accuracy", "-")
+                    comp = score_data.get("completeness", "-")
+                    reas = score_data.get("reasoning", "-")
+                    clar = score_data.get("clarity", "-")
+                    total = sum(v for v in [acc, comp, reas, clar] if isinstance(v, (int, float)))
+                    lines.append(f"| {participant} | {acc} | {comp} | {reas} | {clar} | {total}/20 |")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+    # Final Synthesis
+    lines.append("## Council Consensus")
+    lines.append("")
+    final_answer = synthesis.get("final_answer", "") if synthesis else ""
+    lines.append(final_answer)
+    lines.append("")
+
+    dissent = synthesis.get("dissenting_view") if synthesis else None
+    if dissent:
+        lines.append("### Dissenting View")
+        lines.append("")
+        if isinstance(dissent, dict):
+            lines.append(f"**{dissent.get('advocate', 'Unknown')}**: {dissent.get('position', '')}")
+            if dissent.get('rationale'):
+                lines.append(f"*Rationale*: {dissent.get('rationale')}")
+        else:
+            lines.append(str(dissent))
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def save_trail_to_file(
+    markdown_content: str,
+    session_id: str,
+    query: str,
+    output_dir: str = "./council_trails"
+) -> Path:
+    """
+    Save trail Markdown to file and return the path.
+
+    Args:
+        markdown_content: Generated Markdown string
+        session_id: Council session ID
+        query: Original query (for filename)
+        output_dir: Directory to save file
+
+    Returns:
+        Path to the saved file
+    """
+    # Resolve path
+    output_path = Path(output_dir).expanduser()
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Generate filename
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+
+    # Create slug from query (first 5 words, alphanumeric only)
+    words = re.sub(r'[^a-zA-Z0-9\s]', '', query).lower().split()[:5]
+    slug = "-".join(words) if words else "query"
+    slug = slug[:50]  # Limit length
+
+    filename = f"council_{timestamp}_{slug}.md"
+    filepath = output_path / filename
+
+    # Write file
+    filepath.write_text(markdown_content, encoding='utf-8')
+
+    return filepath
+
+
 def anonymize_responses(responses: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
     labels = ['A', 'B', 'C', 'D', 'E']
     models = list(responses.keys())
@@ -2187,11 +2400,42 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
             'failed_models': degradation.failed_models
         })
 
-    # Build trail metadata if enabled
+    # Build trail output: save to Markdown file if enabled
     trail_output = None
+    trail_file_path = None
     if config.enable_trail and deliberation_trail:
+        # Generate Markdown content
+        markdown_content = generate_trail_markdown(
+            session_id=session_id,
+            query=config.query,
+            mode=config.mode,
+            deliberation_trail=deliberation_trail,
+            synthesis=synthesis,
+            review=review,
+            devils_advocate_summary=devils_advocate_summary,
+            duration_ms=duration_ms,
+            converged=converged,
+            convergence_score=convergence_score,
+            confidence=adjusted_confidence
+        )
+
+        # Save to file
+        trail_file_path = save_trail_to_file(
+            markdown_content=markdown_content,
+            session_id=session_id,
+            query=config.query,
+            output_dir="./council_trails"
+        )
+
+        emit({
+            "type": "trail_saved",
+            "path": str(trail_file_path),
+            "size_bytes": trail_file_path.stat().st_size
+        })
+
+        # Trail output: just the path + metadata (not the full trail)
         trail_output = {
-            "deliberation_trail": deliberation_trail,
+            "trail_file": str(trail_file_path),
             "trail_metadata": {
                 "total_rounds": len(all_rounds),
                 "participants": len(set(e["model"] for e in deliberation_trail)),
