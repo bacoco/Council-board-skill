@@ -82,10 +82,58 @@ Then just ask:
 "Ask the council: Should we use microservices?"
 ```
 
-## Usage avancé
+## Advanced Usage
 
-- **Métriques de performance** (désactivées par défaut) : lancez le script avec `--enable-perf-metrics` pour émettre les latences par étape et les événements d'instrumentation. Exemple : `python3 skills/council/scripts/council.py --enable-perf-metrics --query "Ask the council: Should we use microservices?"`.
-- **Configuration persistante** : définissez `enable_perf_metrics: true` dans [`skills/council/council.config.yaml`](skills/council/council.config.yaml) pour activer l'instrumentation sans repasser un flag CLI.
+### Deliberation Trail (`--trail`)
+
+**Enabled by default.** Shows who said what at each round — full transparency into the deliberation process.
+
+```bash
+python3 skills/council/scripts/council.py --query "Your question" --trail
+```
+
+Output includes:
+```json
+{
+  "deliberation_trail": [
+    {
+      "round": 1,
+      "model": "claude",
+      "persona": "The Type Guardian",
+      "persona_role": "Evaluates type safety and maintainability",
+      "answer": "TypeScript is recommended because...",
+      "key_points": ["Type safety", "IDE support", "Refactoring"],
+      "confidence": 0.92,
+      "latency_ms": 23489
+    }
+  ],
+  "trail_metadata": {
+    "total_rounds": 2,
+    "participants": 3,
+    "total_contributions": 6,
+    "consensus_reached": true
+  }
+}
+```
+
+Disable with `--no-trail` or set `enable_trail: false` in config.
+
+### Performance Metrics (`--enable-perf-metrics`)
+
+Disabled by default. Emits latency data per stage.
+
+```bash
+python3 skills/council/scripts/council.py --enable-perf-metrics --query "Your question"
+```
+
+### Configuration
+
+All flags can be set persistently in [`skills/council/council.config.yaml`](skills/council/council.config.yaml):
+
+```yaml
+enable_trail: true          # Show deliberation trail (default: true)
+enable_perf_metrics: false  # Show performance metrics (default: false)
+```
 
 <details>
 <summary>Prerequisites - CLI Installation</summary>
