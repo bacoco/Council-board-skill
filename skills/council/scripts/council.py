@@ -46,6 +46,9 @@ MODEL_TIMEOUT = DEFAULT_TIMEOUT
 # Pre-compiled regex patterns (performance optimization)
 JSON_PATTERN = re.compile(r'\{[\s\S]*\}')  # Extract JSON from text
 
+# Context limits
+MAX_OPINION_CONTEXT_CHARS = 1500  # Cap per-opinion to prevent context dominance
+
 # Performance instrumentation
 ENABLE_PERF_INSTRUMENTATION = False  # Set to True to emit timing metrics
 
@@ -741,6 +744,7 @@ class SessionConfig:
     council_budget: str
     output_level: str
     max_rounds: int
+    min_quorum: int = DEFAULT_MIN_QUORUM  # Minimum valid responses per round
     enable_perf_metrics: bool = False
     enable_trail: bool = False  # Include detailed deliberation trail in output
     context: Optional[str] = None  # Code or additional context for analysis
@@ -1436,23 +1440,29 @@ Respond with JSON:
 def build_context_from_previous_rounds(current_model: str, opinions: dict[str, str], anonymize: bool = True, mode: str = 'consensus') -> str:
     """Build context showing what OTHER models said (excluding current model).
 
+    Design rationale (others-only):
+    - Prevents self-reinforcement bias and circular reasoning
+    - Forces genuine engagement with alternative perspectives
+    - Maintains epistemic autonomy between rounds
+
     Sanitizes outputs to prevent cross-model prompt injection attacks.
     """
     context_parts = []
     validator = InputValidator()
 
-    for model, opinion in opinions.items():
+    # Create stable mapping from ALL model keys to participant labels BEFORE filtering.
+    # This ensures Participant A/B/C assignment is deterministic across all rounds
+    # regardless of which model is currently being prompted.
+    sorted_models = sorted(opinions.keys())
+    model_to_label = {name: f"Participant {chr(65 + i)}" for i, name in enumerate(sorted_models)}
+
+    for model in sorted_models:
         if model == current_model:
-            continue  # Don't show model its own previous response
+            continue  # Skip self - see docstring for rationale
 
-        # Sanitize opinion to prevent cross-model injection
+        opinion = opinions[model]
         sanitized_opinion = validator.sanitize_llm_output(opinion)
-
-        # Anonymize or use model name (persona titles are in the response JSON if needed)
-        if anonymize:
-            label = f"Participant {chr(65 + len(context_parts))}"
-        else:
-            label = model
+        label = model_to_label[model] if anonymize else model
 
         # Extract key points from opinion JSON
         try:
@@ -1461,10 +1471,16 @@ def build_context_from_previous_rounds(current_model: str, opinions: dict[str, s
             confidence = opinion_data.get('confidence', 0.0)
             answer = opinion_data.get('answer', sanitized_opinion)
 
-            # Sanitize extracted answer too (in case JSON parsing bypassed initial sanitization)
             answer = validator.sanitize_llm_output(answer)
+            # Truncate to prevent one model dominating context
+            if len(answer) > MAX_OPINION_CONTEXT_CHARS:
+                answer = answer[:MAX_OPINION_CONTEXT_CHARS] + '... [truncated]'
+
             context_parts.append(f"{label} (confidence: {confidence}):\n{answer}\nKey points: {', '.join(key_points)}")
         except Exception:
+            # Fallback for non-JSON opinions, with length cap
+            if len(sanitized_opinion) > MAX_OPINION_CONTEXT_CHARS:
+                sanitized_opinion = sanitized_opinion[:MAX_OPINION_CONTEXT_CHARS] + '... [truncated]'
             context_parts.append(f"{label}:\n{sanitized_opinion}")
 
     return "\n\n".join(context_parts)
@@ -2165,11 +2181,8 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             # Get persona title for logging (always from dynamic_persona now)
             persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-            # Use adaptive timeout if available, otherwise model-specific timeout, then config default
-            if adaptive_timeout:
-                model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode)
-            else:
-                model_timeout = MODEL_TIMEOUT
+            # Simple fixed timeout - no adaptive complexity
+            model_timeout = MODEL_TIMEOUT
             model_timeouts.append(model_timeout)
 
             emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title, "timeout": model_timeout})
@@ -2865,11 +2878,8 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
         dynamic_persona = assigned_personas[idx] if idx < len(assigned_personas) else None
         persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-        # Use adaptive timeout if available, otherwise model-specific timeout
-        if adaptive_timeout:
-            model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode)
-        else:
-            model_timeout = MODEL_TIMEOUT
+        # Simple fixed timeout
+        model_timeout = MODEL_TIMEOUT
 
         emit({"type": "vote_start", "model": model_instance, "persona": persona_title, "timeout": model_timeout})
 
