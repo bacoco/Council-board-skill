@@ -36,6 +36,7 @@ class SessionConfig:
     output_level: str
     max_rounds: int
     min_quorum: int = DEFAULT_MIN_QUORUM  # Minimum valid responses per round
+    convergence_threshold: float = 0.8  # Threshold for declaring convergence
     enable_perf_metrics: bool = False
     enable_trail: bool = False  # Include detailed deliberation trail in output
     context: Optional[str] = None  # Code or additional context for analysis
