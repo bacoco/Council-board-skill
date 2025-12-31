@@ -100,7 +100,7 @@ class InputValidator:
     MAX_QUERY_LENGTH = 50000      # 50k chars
     MAX_CONTEXT_LENGTH = 200000   # 200k chars (for code files)
     MAX_ROUNDS = 10                # Prevent DoS
-    MAX_TIMEOUT = 300              # 5 minutes max
+    MAX_TIMEOUT = 420              # 7 minutes max (Codex needs time for code exploration)
 
     # ============================================================================
     # Validation Methods
@@ -116,6 +116,12 @@ class InputValidator:
 
         Returns:
             ValidationResult with sanitized query and violations list
+
+        Behavior:
+            - strict=True: Any violation returns is_valid=False immediately
+            - strict=False: Violations are recorded as warnings, but is_valid=True
+              as long as input was sanitized successfully (allows benign queries
+              that happen to contain shell operators like '|' in text)
         """
         violations = []
 
@@ -149,8 +155,10 @@ class InputValidator:
         # Instead, we just detect and warn.
         sanitized = query
 
+        # With strict=False, is_valid=True even with violations (they're just warnings)
+        # With strict=True, we already returned False above on any violation
         return ValidationResult(
-            is_valid=len(violations) == 0,
+            is_valid=True,  # If we got here, input is usable (violations are warnings)
             sanitized_input=sanitized,
             violations=violations
         )
@@ -287,6 +295,60 @@ class InputValidator:
             return redacted
         else:
             return output
+
+    def sanitize_llm_output(self, output: str, max_length: int = 50000) -> str:
+        """
+        Sanitize LLM output before passing to subsequent rounds.
+
+        Prevents cross-model prompt injection by:
+        1. Redacting any leaked secrets
+        2. Escaping injection patterns (system tags, role overrides)
+        3. Limiting output length
+
+        Args:
+            output: Raw LLM output string
+            max_length: Maximum allowed length
+
+        Returns:
+            Sanitized output safe for cross-model use
+        """
+        if not output:
+            return output
+
+        # 1. Truncate to max length
+        if len(output) > max_length:
+            output = output[:max_length] + "\n[TRUNCATED]"
+
+        # 2. Redact secrets
+        output, _ = self._redact_secrets(output)
+
+        # 3. Escape injection patterns - replace dangerous tags with safe versions
+        # Escape system/instruction tags that could manipulate next model
+        output = re.sub(r'<\s*/?\s*system\s*>', '[system]', output, flags=re.IGNORECASE)
+        output = re.sub(r'<\s*/?\s*s\s*>', '[s]', output, flags=re.IGNORECASE)
+        output = re.sub(r'<\s*/?\s*instructions?\s*>', '[instruction]', output, flags=re.IGNORECASE)
+
+        # Escape role override attempts
+        output = re.sub(
+            r'(you\s+are\s+now\s+(in\s+)?(admin|developer|debug|god)\s+mode)',
+            r'[BLOCKED: \1]',
+            output,
+            flags=re.IGNORECASE
+        )
+        output = re.sub(
+            r'(ignore\s+(all\s+)?(previous|above|prior|all)\s+(instructions?|prompts?|rules?))',
+            r'[BLOCKED: \1]',
+            output,
+            flags=re.IGNORECASE
+        )
+        output = re.sub(
+            r'(forget\s+(everything|all|previous))',
+            r'[BLOCKED: \1]',
+            output,
+            flags=re.IGNORECASE
+        )
+
+        return output
 
 
 # ============================================================================

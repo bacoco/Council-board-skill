@@ -36,15 +36,12 @@ CONVERGENCE_SIGNAL_WEIGHT = 0.4      # Weight for explicit convergence signals
 CONVERGENCE_THRESHOLD = 0.8          # Threshold for declaring convergence
 
 # Session settings
-MIN_QUORUM = 2  # Minimum valid responses required per round
-DEFAULT_TIMEOUT = 60  # Default timeout in seconds for CLI calls
+DEFAULT_MIN_QUORUM = 2  # Default minimum valid responses required per round
 
-# Per-model timeouts (Codex needs more time for code exploration)
-MODEL_TIMEOUTS = {
-    'claude': 60,
-    'gemini': 60,
-    'codex': 120,  # Codex explores code with tools, needs more time
-}
+# Timeout for model calls - same for all since they run in parallel
+# Total wait time = slowest model, so no point having different values
+DEFAULT_TIMEOUT = 420  # 7 minutes - Codex needs time to explore code with tools
+MODEL_TIMEOUT = DEFAULT_TIMEOUT
 
 # Pre-compiled regex patterns (performance optimization)
 JSON_PATTERN = re.compile(r'\{[\s\S]*\}')  # Extract JSON from text
@@ -286,11 +283,12 @@ class DegradationState:
         DegradationLevel.MINIMAL: 0.25,   # 25% penalty
     }
 
-    def __init__(self, expected_models: List[str]):
+    def __init__(self, expected_models: List[str], min_quorum: int = DEFAULT_MIN_QUORUM):
         self.expected_models = set(expected_models)
         self.available_models = set(expected_models)
         self.failed_models = {}  # model -> error reason
         self.recovered_models = set()  # models that recovered mid-session
+        self.min_quorum = min_quorum  # Use config value instead of hardcoded constant
         self._level = DegradationLevel.FULL
         self._events = []
         self._start_time = time.time()
@@ -303,7 +301,7 @@ class DegradationState:
 
         if available_count == expected_count:
             return DegradationLevel.FULL
-        elif available_count >= MIN_QUORUM:
+        elif available_count >= self.min_quorum:
             return DegradationLevel.DEGRADED
         else:
             return DegradationLevel.MINIMAL
@@ -354,7 +352,7 @@ class DegradationState:
 
     def can_continue(self) -> bool:
         """Check if session can continue (meets minimum quorum)."""
-        return len(self.available_models) >= MIN_QUORUM
+        return len(self.available_models) >= self.min_quorum
 
     def get_fallback_models(self) -> List[str]:
         """Get list of available models for fallback operations."""
@@ -499,10 +497,10 @@ DEGRADATION_STATE: Optional[DegradationState] = None
 ADAPTIVE_TIMEOUT: Optional[AdaptiveTimeout] = None
 
 
-def init_degradation(expected_models: List[str], base_timeout: int = DEFAULT_TIMEOUT) -> Tuple[DegradationState, AdaptiveTimeout]:
+def init_degradation(expected_models: List[str], base_timeout: int = DEFAULT_TIMEOUT, min_quorum: int = DEFAULT_MIN_QUORUM) -> Tuple[DegradationState, AdaptiveTimeout]:
     """Initialize degradation tracking for a new session."""
     global DEGRADATION_STATE, ADAPTIVE_TIMEOUT
-    DEGRADATION_STATE = DegradationState(expected_models)
+    DEGRADATION_STATE = DegradationState(expected_models, min_quorum=min_quorum)
     ADAPTIVE_TIMEOUT = AdaptiveTimeout(base_timeout)
     return DEGRADATION_STATE, ADAPTIVE_TIMEOUT
 
@@ -1436,12 +1434,19 @@ Respond with JSON:
 </instructions>"""
 
 def build_context_from_previous_rounds(current_model: str, opinions: dict[str, str], anonymize: bool = True, mode: str = 'consensus') -> str:
-    """Build context showing what OTHER models said (excluding current model)."""
+    """Build context showing what OTHER models said (excluding current model).
+
+    Sanitizes outputs to prevent cross-model prompt injection attacks.
+    """
     context_parts = []
+    validator = InputValidator()
 
     for model, opinion in opinions.items():
         if model == current_model:
             continue  # Don't show model its own previous response
+
+        # Sanitize opinion to prevent cross-model injection
+        sanitized_opinion = validator.sanitize_llm_output(opinion)
 
         # Anonymize or use model name (persona titles are in the response JSON if needed)
         if anonymize:
@@ -1451,14 +1456,16 @@ def build_context_from_previous_rounds(current_model: str, opinions: dict[str, s
 
         # Extract key points from opinion JSON
         try:
-            opinion_data = extract_json(opinion)
+            opinion_data = extract_json(sanitized_opinion)
             key_points = opinion_data.get('key_points', [])
             confidence = opinion_data.get('confidence', 0.0)
-            answer = opinion_data.get('answer', opinion)
+            answer = opinion_data.get('answer', sanitized_opinion)
 
+            # Sanitize extracted answer too (in case JSON parsing bypassed initial sanitization)
+            answer = validator.sanitize_llm_output(answer)
             context_parts.append(f"{label} (confidence: {confidence}):\n{answer}\nKey points: {', '.join(key_points)}")
         except Exception:
-            context_parts.append(f"{label}:\n{opinion}")
+            context_parts.append(f"{label}:\n{sanitized_opinion}")
 
     return "\n\n".join(context_parts)
 
@@ -2162,7 +2169,7 @@ async def gather_opinions(config: SessionConfig, round_num: int = 1, previous_ro
             if adaptive_timeout:
                 model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode)
             else:
-                model_timeout = MODEL_TIMEOUTS.get(base_model, config.timeout)
+                model_timeout = MODEL_TIMEOUT
             model_timeouts.append(model_timeout)
 
             emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title, "timeout": model_timeout})
@@ -2438,7 +2445,7 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
     metrics = init_metrics(session_id)
 
     # Initialize graceful degradation tracking
-    degradation, adaptive_timeout = init_degradation(config.models, config.timeout)
+    degradation, adaptive_timeout = init_degradation(config.models, config.timeout, config.min_quorum)
 
     emit({"type": "status", "stage": 0, "msg": f"Starting council session {session_id} (mode: {config.mode}, max_rounds: {config.max_rounds})"})
 
@@ -2474,9 +2481,9 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
 
         # Check quorum
         valid_count = sum(1 for r in responses.values() if r.success)
-        if valid_count < MIN_QUORUM:
-            metrics.emit_event('QuorumNotMet', {'round': round_num, 'required': MIN_QUORUM, 'got': valid_count})
-            emit({"type": "error", "msg": f"Quorum not met in round {round_num} (need >= {MIN_QUORUM} valid responses)"})
+        if valid_count < degradation.min_quorum:
+            metrics.emit_event('QuorumNotMet', {'round': round_num, 'required': degradation.min_quorum, 'got': valid_count})
+            emit({"type": "error", "msg": f"Quorum not met in round {round_num} (need >= {degradation.min_quorum} valid responses)"})
             if round_num == 1:
                 metrics_summary = metrics.get_summary()
                 metrics.emit_summary()
@@ -2582,7 +2589,7 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
         metrics.record_latency('devils_advocate_round', int((time.time() - devils_start) * 1000))
 
         valid_devils = sum(1 for r in devils_responses.values() if r.success)
-        if valid_devils >= MIN_QUORUM:
+        if valid_devils >= degradation.min_quorum:
             devils_advocate_round = {m: r.content for m, r in devils_responses.items() if r.success}
             devils_advocate_summary = await summarize_devils_advocate_arguments(
                 config.query,
@@ -2862,7 +2869,7 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
         if adaptive_timeout:
             model_timeout = adaptive_timeout.get_timeout(base_model, mode=config.mode)
         else:
-            model_timeout = MODEL_TIMEOUTS.get(base_model, config.timeout)
+            model_timeout = MODEL_TIMEOUT
 
         emit({"type": "vote_start", "model": model_instance, "persona": persona_title, "timeout": model_timeout})
 
@@ -3060,7 +3067,7 @@ async def run_vote_council(config: SessionConfig) -> dict:
     metrics = init_metrics(session_id)
 
     # Initialize graceful degradation tracking
-    degradation, adaptive_timeout = init_degradation(config.models, config.timeout)
+    degradation, adaptive_timeout = init_degradation(config.models, config.timeout, config.min_quorum)
 
     emit({"type": "status", "stage": 0, "msg": f"Starting vote session {session_id}"})
 
@@ -3075,15 +3082,15 @@ async def run_vote_council(config: SessionConfig) -> dict:
         metrics.record_latency('model_call', ballot.latency_ms)
 
     # Check quorum
-    if len(ballots) < MIN_QUORUM:
-        metrics.emit_event('QuorumNotMet', {'required': MIN_QUORUM, 'got': len(ballots), 'mode': 'vote'})
-        emit({"type": "error", "msg": f"Vote quorum not met (got {len(ballots)}, need {MIN_QUORUM})"})
+    if len(ballots) < degradation.min_quorum:
+        metrics.emit_event('QuorumNotMet', {'required': degradation.min_quorum, 'got': len(ballots), 'mode': 'vote'})
+        emit({"type": "error", "msg": f"Vote quorum not met (got {len(ballots)}, need {degradation.min_quorum})"})
         metrics_summary = metrics.get_summary()
         metrics.emit_summary()
         emit_perf_metrics(metrics_summary)
-        return {"error": "Vote quorum not met", "ballots": len(ballots), "required": MIN_QUORUM, "metrics": metrics_summary}
+        return {"error": "Vote quorum not met", "ballots": len(ballots), "required": degradation.min_quorum, "metrics": metrics_summary}
 
-    emit({"type": "quorum_met", "votes": len(ballots), "required": MIN_QUORUM})
+    emit({"type": "quorum_met", "votes": len(ballots), "required": degradation.min_quorum})
 
     # Stage 2: Tally votes
     tally_start = time.time()
@@ -3580,7 +3587,7 @@ def main():
 
     # Load context from manifest file if specified
     if args.context_file:
-        context_path = Path(args.context_file)
+        context_path = Path(args.context_file).resolve()
         if context_path.exists():
             try:
                 manifest_content = context_path.read_text(encoding='utf-8')
@@ -3595,11 +3602,48 @@ def main():
                 if file_paths:
                     context_parts.append("\n\n# === LOADED FILES ===\n")
                     files_loaded = []
+                    files_blocked = []
+
+                    # SECURITY: Scope file paths to manifest directory (prevent arbitrary file reads)
+                    allowed_base = context_path.parent.resolve()
+                    max_file_size = 100000  # 100KB per file limit
 
                     for file_path in file_paths:
                         fp = Path(file_path)
+
+                        # Handle relative paths (resolve relative to manifest directory)
+                        if not fp.is_absolute():
+                            fp = (allowed_base / fp).resolve()
+                        else:
+                            fp = fp.resolve()
+
+                        # SECURITY: Path scoping - only allow files within manifest directory tree
+                        try:
+                            fp.relative_to(allowed_base)
+                        except ValueError:
+                            # Path is outside allowed directory
+                            files_blocked.append(file_path)
+                            context_parts.append(f"\n## File: {file_path}\n[BLOCKED: Path outside allowed scope]\n")
+                            continue
+
+                        # SECURITY: Prevent symlink attacks
+                        if fp.is_symlink():
+                            real_path = fp.resolve()
+                            try:
+                                real_path.relative_to(allowed_base)
+                            except ValueError:
+                                files_blocked.append(file_path)
+                                context_parts.append(f"\n## File: {file_path}\n[BLOCKED: Symlink points outside allowed scope]\n")
+                                continue
+
                         if fp.exists():
                             try:
+                                # SECURITY: Check file size before reading
+                                file_size = fp.stat().st_size
+                                if file_size > max_file_size:
+                                    context_parts.append(f"\n## File: {file_path}\n[BLOCKED: File too large ({file_size} > {max_file_size} bytes)]\n")
+                                    continue
+
                                 content = fp.read_text(encoding='utf-8')
                                 context_parts.append(f"\n## File: {file_path}\n```\n{content}\n```\n")
                                 files_loaded.append(file_path)
@@ -3608,7 +3652,12 @@ def main():
                         else:
                             context_parts.append(f"\n## File: {file_path}\n[File not found]\n")
 
-                    emit({'type': 'context_loaded', 'manifest': str(context_path), 'files_loaded': files_loaded})
+                    emit({
+                        'type': 'context_loaded',
+                        'manifest': str(context_path),
+                        'files_loaded': files_loaded,
+                        'files_blocked': files_blocked
+                    })
                 else:
                     # No file paths found, just use manifest as context
                     emit({'type': 'context_loaded', 'manifest': str(context_path), 'files_loaded': []})
