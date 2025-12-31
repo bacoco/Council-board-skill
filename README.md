@@ -82,77 +82,64 @@ Then just ask:
 "Ask the council: Should we use microservices?"
 ```
 
-## Advanced Usage
+## Features
 
-### Deliberation Trail (`--trail`)
+### 🎯 Deliberation Modes
 
-**Enabled by default.** Saves the full deliberation process to a Markdown file for complete transparency.
+Choose how the AI models work together:
 
-```bash
-python3 skills/council/scripts/council.py --query "Your question"
-```
+| Mode | Best For | What Happens |
+|------|----------|--------------|
+| **Consensus** | Technical questions, decisions | Models discuss until they agree |
+| **Debate** | Controversial topics | One argues FOR, one AGAINST |
+| **Devil's Advocate** | Testing ideas, security reviews | One model actively challenges |
+| **Vote** | Multiple choice decisions | Each model votes with justification |
 
-JSON output includes a clickable path to the trail file:
-```json
-{
-  "answer": "The council recommends...",
-  "confidence": 0.92,
-  "trail_file": "./council_trails/council_2025-12-31T143052_your-question.md",
-  "trail_metadata": {
-    "total_rounds": 2,
-    "participants": 3,
-    "total_contributions": 6,
-    "consensus_reached": true
-  }
-}
-```
+Just say what you need:
+- *"Debate this: should we use React or Vue?"*
+- *"Challenge my design for a login system"*
+- *"Vote on: AWS vs Azure vs GCP"*
 
-The Markdown file contains the complete reasoning chain:
-- Session metadata (timestamp, duration, mode, convergence)
-- Full query
-- Each round with all model contributions (persona, role, full answer, key points, confidence, latency)
-- Devil's advocate analysis (if triggered)
-- Peer review scores
-- Final synthesis with dissenting views
+### 📋 Full Reasoning Trail
 
-**Click the path in your terminal to open the file and review the full deliberation.**
+Every deliberation is automatically saved so you can see exactly how the AIs reached their conclusion:
 
-Disable with `--no-trail` to skip trail generation.
+- What each AI expert said in each round
+- How they responded to each other's arguments
+- The final peer review scores
+- Why they agreed or disagreed
 
-### Performance Metrics (`--enable-perf-metrics`)
+**Find your trails in:** `council_trails/` folder — just click the file path shown after each session.
 
-Disabled by default. Emits latency data per stage.
+### ⚙️ Customization
 
-```bash
-python3 skills/council/scripts/council.py --enable-perf-metrics --query "Your question"
-```
+You can adjust Council's behavior in the settings file `council.config.yaml`:
 
-### Configuration
-
-All flags can be set persistently in [`skills/council/council.config.yaml`](skills/council/council.config.yaml):
-
-```yaml
-enable_trail: true          # Save trail to Markdown file (default: true)
-enable_perf_metrics: false  # Show performance metrics (default: false)
-```
+| Setting | What It Does | Default |
+|---------|--------------|---------|
+| `max_rounds` | How many rounds of debate | 3 |
+| `timeout` | How long to wait for each AI | 7 minutes |
+| `enable_trail` | Save the full discussion | Yes |
 
 <details>
-<summary>Prerequisites - CLI Installation</summary>
+<summary>🔧 Prerequisites - Installing the AI Tools</summary>
 
-**Claude CLI** (requires Claude Pro/Max subscription):
-```bash
+You need to install the command-line tools for each AI:
+
+**Claude** (requires Claude Pro or Max subscription):
+```
 npm install -g @anthropic-ai/claude-code
 claude auth login
 ```
 
-**Gemini CLI**:
-```bash
+**Gemini**:
+```
 npm install -g @anthropic-ai/gemini-cli
 gemini auth login
 ```
 
-**Codex CLI**:
-```bash
+**Codex**:
+```
 npm install -g @openai/codex
 codex auth
 ```
