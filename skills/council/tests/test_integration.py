@@ -20,22 +20,17 @@ from dataclasses import dataclass
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.council import (
-    LLMResponse,
-    SessionConfig,
-    DegradationState,
-    AdaptiveTimeout,
-    run_council,
-    collect_votes,
-    tally_votes,
-    check_convergence,
-    build_context_from_previous_rounds,
-    peer_review,
-    init_degradation,
-    DEFAULT_MIN_QUORUM,
-    MODEL_TIMEOUT,
-)
+from core.models import LLMResponse, SessionConfig, VoteBallot, DEFAULT_MIN_QUORUM
+from core.state import DegradationState, AdaptiveTimeout, init_degradation, DEFAULT_TIMEOUT
+from core.convergence import check_convergence
+from core.prompts import build_context_from_previous_rounds
+from core.review import peer_review
+from modes.consensus import run_council
+from modes.vote import collect_votes, tally_votes
 from providers import CouncilConfig
+
+# Alias for compatibility
+MODEL_TIMEOUT = DEFAULT_TIMEOUT
 
 
 # ============================================================================
@@ -227,8 +222,6 @@ def test_vote_tallying():
     print("=" * 70)
     print("TEST: Vote Tallying")
     print("=" * 70)
-
-    from scripts.council import VoteBallot
 
     ballots = [
         VoteBallot(model='claude', vote='A', weight=0.9, justification='Best option', confidence=0.9, latency_ms=100),

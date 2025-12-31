@@ -5,19 +5,31 @@ from pathlib import Path
 
 import pytest
 
-# Ensure scripts/ is importable
+# Ensure council package is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts import council
-from scripts.council import (
-    LLMResponse,
-    Persona,
-    SessionConfig,
-    check_convergence,
-    run_adaptive_cascade,
-    gather_opinions,
-    generate_personas_with_llm,
-)
+from core.models import LLMResponse, SessionConfig
+from core.convergence import check_convergence
+from core.personas import generate_personas_with_llm
+from core.state import DegradationState
+from core.adapters import ADAPTERS, check_cli_available
+from persona_manager import Persona, PersonaManager
+from modes.consensus import gather_opinions
+from modes.adaptive import run_adaptive_cascade
+
+# Create module-like object for monkeypatching
+class CouncilModule:
+    ADAPTERS = ADAPTERS
+    check_cli_available = staticmethod(check_cli_available)
+    generate_personas_with_llm = staticmethod(generate_personas_with_llm)
+    ADAPTIVE_TIMEOUT = None
+    DEGRADATION_STATE = None
+    DegradationState = DegradationState
+    run_council = None
+    meta_synthesize = None
+    PERSONA_MANAGER = PersonaManager()
+
+council = CouncilModule()
 
 
 def test_check_convergence_combines_confidence_and_signal():

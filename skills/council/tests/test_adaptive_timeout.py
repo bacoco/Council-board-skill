@@ -4,7 +4,7 @@ from pathlib import Path
 # Make council package importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.council import AdaptiveTimeout
+from core.state import AdaptiveTimeout
 
 
 def test_mode_specific_adaptation():

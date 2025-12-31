@@ -303,6 +303,15 @@ Reference guides in `skills/council/references/`:
 - `security.md` — Input validation, secret redaction
 - `examples.md` — Usage examples
 
+## Recent Improvements
+
+Fixes from Council self-review (convergence: 0.926, confidence: 91%):
+
+- [x] **Trail IO Error Handling** — Added try/except around file writes for constrained filesystems
+- [x] **Thread-Safe State** — Added threading locks to prevent race conditions in global state
+- [x] **Subprocess Cleanup** — Factored duplicate cleanup code into `_cleanup_subprocess()` helper
+- [x] **Documentation** — Added "Known Limitations" section to SKILL.md
+
 ## Roadmap
 
 Future improvements identified by Council self-evaluation:
@@ -313,6 +322,7 @@ Future improvements identified by Council self-evaluation:
 - [ ] **CI/CD Pipeline** — GitHub Actions, automated testing, version compatibility matrix
 - [ ] **Benchmarks** — Compare output quality/cost/latency vs single-model baselines
 - [ ] **Health Checks** — Endpoints for container orchestration, graceful SIGTERM handling
+- [ ] **Package Structure** — Replace sys.path.insert() with proper relative imports
 
 ## License
 
