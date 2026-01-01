@@ -12,8 +12,8 @@ Tests protection against:
 import sys
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add council package to path (tests at project root, skill at skills/council)
+sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "council"))
 
 from security.input_validator import InputValidator
 

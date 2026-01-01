@@ -1,8 +1,8 @@
 import sys
 from pathlib import Path
 
-# Make council package importable
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Make council package importable (tests at project root, skill at skills/council)
+sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "council"))
 
 from core.state import AdaptiveTimeout
 

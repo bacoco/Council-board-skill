@@ -17,8 +17,8 @@ from pathlib import Path
 from unittest.mock import patch, AsyncMock
 from dataclasses import dataclass
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add council package to path (tests at project root, skill at skills/council)
+sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "council"))
 
 from core.models import LLMResponse, SessionConfig, VoteBallot, DEFAULT_MIN_QUORUM
 from core.state import DegradationState, AdaptiveTimeout, init_degradation, DEFAULT_TIMEOUT

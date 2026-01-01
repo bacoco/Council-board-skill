@@ -211,8 +211,11 @@ def generate_trail_markdown(
                     comp = score_data.get("completeness", "-")
                     reas = score_data.get("reasoning", "-")
                     clar = score_data.get("clarity", "-")
-                    total = sum(v for v in [acc, comp, reas, clar] if isinstance(v, (int, float)))
-                    lines.append(f"| {participant} | {acc} | {comp} | {reas} | {clar} | {total}/20 |")
+                    numeric_scores = [v for v in [acc, comp, reas, clar] if isinstance(v, (int, float))]
+                    total = sum(numeric_scores)
+                    # Determine max based on scale (0-5 each = 20 max, 0-20 each = 80 max)
+                    max_score = 20 if all(v <= 5 for v in numeric_scores) else 80
+                    lines.append(f"| {participant} | {acc} | {comp} | {reas} | {clar} | {total}/{max_score} |")
             lines.append("")
             lines.append("---")
             lines.append("")

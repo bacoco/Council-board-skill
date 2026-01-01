@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-# Ensure council package is importable
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Ensure council package is importable (tests at project root, skill at skills/council)
+sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "council"))
 
 from core.models import LLMResponse, SessionConfig
 from core.convergence import check_convergence
