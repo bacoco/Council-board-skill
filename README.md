@@ -112,60 +112,22 @@ Every deliberation is automatically saved so you can see exactly how the AIs rea
 
 Skip the full Council deliberation and ask a single model (or a few) directly.
 
-**Ask only Claude:**
-```bash
-python3 skills/council/scripts/council.py --direct --models claude \
-  --query "Explain what is async/await in simple terms" --human
-```
-
-**Ask only Gemini:**
-```bash
-python3 skills/council/scripts/council.py --direct --models gemini \
-  --query "What is the best database for IoT projects?" --human
-```
-
-**Ask only Codex:**
-```bash
-python3 skills/council/scripts/council.py --direct --models codex \
-  --query "Write a Python function to sort a list" --human
-```
-
-**Compare two models (Claude and Gemini):**
-```bash
-python3 skills/council/scripts/council.py --direct --models claude,gemini \
-  --query "What are the pros and cons of microservices?" --human
-```
-
-**Ask all three models the same question:**
-```bash
-python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
-  --query "What AI model are you? Answer in one sentence." --human
-```
+| What you say | What happens |
+|--------------|--------------|
+| *"Ask Claude: explain async/await in simple terms"* | Claude responds directly |
+| *"Use Gemini to find the best database for IoT"* | Gemini responds directly |
+| *"Have Codex write a Python sort function"* | Codex responds directly |
+| *"Ask Claude and Gemini: pros of microservices?"* | Both respond (no synthesis) |
+| *"Query all models: what AI are you?"* | All 3 respond sequentially |
 
 ### 📊 Check if Models are Working
 
-**Verify all CLIs are installed:**
-```bash
-python3 skills/council/scripts/council.py --check
-```
-
-**Quick test — ask all models to respond:**
-```bash
-python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
-  --query "Just say OK if you can hear me" --human
-```
-
-**Ask each model to identify itself:**
-```bash
-python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
-  --query "What is your name and who made you?" --human
-```
-
-**Check what tools Codex has access to:**
-```bash
-python3 skills/council/scripts/council.py --direct --models codex \
-  --query "List the tools you have access to" --human
-```
+| What you say | What happens |
+|--------------|--------------|
+| *"Check if all models are working"* | Verifies all CLIs installed |
+| *"Ping all models"* | Quick test, each says OK |
+| *"Ask each model: who made you?"* | Identity check |
+| *"What tools does Codex have?"* | Lists Codex capabilities |
 
 <details>
 <summary>📈 Check Your Remaining Quota</summary>
@@ -177,6 +139,22 @@ Models don't show quota via command line. Check your usage online:
 | Claude | [console.anthropic.com/settings/usage](https://console.anthropic.com/settings/usage) |
 | Gemini | [aistudio.google.com](https://aistudio.google.com) |
 | Codex | [platform.openai.com/usage](https://platform.openai.com/usage) |
+
+</details>
+
+<details>
+<summary>🔧 CLI Reference (for developers)</summary>
+
+```bash
+# Direct mode - single model
+python3 skills/council/scripts/council.py --direct --models claude --query "..." --human
+
+# Direct mode - multiple models
+python3 skills/council/scripts/council.py --direct --models claude,gemini,codex --query "..." --human
+
+# Check CLI installation
+python3 skills/council/scripts/council.py --check
+```
 
 </details>
 

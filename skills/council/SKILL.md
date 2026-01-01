@@ -1,6 +1,6 @@
 ---
 name: council
-description: Orchestrates multi-model deliberation from Claude, Gemini, and Codex. Use when user asks to "ask the council", "debate this", "vote on", "get multiple opinions", "peer review", "challenge my design", or requests collective AI intelligence.
+description: Orchestrates multi-model deliberation from Claude, Gemini, and Codex. Use when user asks to "ask the council", "debate this", "vote on", "get multiple opinions", "peer review", "challenge my design", or requests collective AI intelligence. Also use for direct model queries like "ask Claude directly", "use Gemini", "ask Codex", "ask only Claude", "query Gemini", or comparing specific models.
 allowed-tools:
   - "Bash(python3 ${SKILL_ROOT}/scripts/council.py:*)"
   - "Read(**/*.py)"
@@ -42,6 +42,26 @@ python3 ${SKILL_ROOT}/scripts/council.py \
 | `adaptive` | Uncertain complexity | Auto-escalates based on convergence |
 
 **Mode details**: See [references/modes.md](references/modes.md)
+
+## Direct Mode (Skip Deliberation)
+
+Query individual models directly without multi-round deliberation:
+
+```bash
+# Single model
+python3 ${SKILL_ROOT}/scripts/council.py --direct --models claude --query "[question]" --human
+
+# Multiple models (sequential, no synthesis)
+python3 ${SKILL_ROOT}/scripts/council.py --direct --models claude,gemini --query "[question]" --human
+```
+
+**When user says** → **Use this command**:
+- "Ask Claude directly: X" → `--direct --models claude`
+- "Use Gemini to explain Y" → `--direct --models gemini`
+- "Ask Codex to write Z" → `--direct --models codex`
+- "Ask Claude and Gemini: X" → `--direct --models claude,gemini`
+- "Query all models: X" → `--direct --models claude,gemini,codex`
+- "Ask the council: X" → No `--direct` flag (full deliberation)
 
 ## Key Options
 
