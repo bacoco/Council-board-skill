@@ -148,18 +148,44 @@ Use `--direct` for:
 
 ### 📊 Check Model Status & Usage
 
+**Check if all models are working:**
 ```bash
-# Check all CLIs are installed
 python3 skills/council/scripts/council.py --check
 ```
 
-**Remaining quota per model:**
+**Ask each model directly (natural language):**
+```bash
+# "Are you working?"
+python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
+  --query "Say OK if you are working" --human
 
-| Model | How to Check Quota |
-|-------|-------------------|
-| **Claude** | Check usage at [console.anthropic.com](https://console.anthropic.com) or via API |
-| **Gemini** | No daily limit exposed in CLI — check [aistudio.google.com](https://aistudio.google.com) |
-| **Codex** | `codex exec "What is your status?"` or check [platform.openai.com](https://platform.openai.com) |
+# "What model are you?"
+python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
+  --query "What is your name and version?" --human
+
+# "What can you do?"
+python3 skills/council/scripts/council.py --direct --models codex \
+  --query "What tools do you have access to?" --human
+```
+
+**Quick ping all models:**
+```bash
+python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
+  --query "Respond with just: OK" --human --timeout 30
+```
+
+<details>
+<summary>📈 Check Remaining Quota (Web Dashboards)</summary>
+
+Models don't expose quota via CLI, but you can check online:
+
+| Model | Dashboard |
+|-------|-----------|
+| Claude | [console.anthropic.com/settings/usage](https://console.anthropic.com/settings/usage) |
+| Gemini | [aistudio.google.com](https://aistudio.google.com) |
+| Codex | [platform.openai.com/usage](https://platform.openai.com/usage) |
+
+</details>
 
 ### ⚙️ Customization
 
