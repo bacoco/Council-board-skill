@@ -444,9 +444,8 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
             config_models=config.models
         )
 
-        # Save to file (relative to skill directory)
-        skill_root = Path(__file__).parent.parent
-        trail_dir = skill_root / "council_trails"
+        # Save to file (relative to current working directory, not skill folder)
+        trail_dir = Path.cwd() / "council_trails"
         trail_file_path = save_trail_to_file(
             markdown_content=markdown_content,
             session_id=session_id,
