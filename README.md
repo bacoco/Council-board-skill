@@ -108,79 +108,72 @@ Every deliberation is automatically saved so you can see exactly how the AIs rea
 
 **Find your trails in:** `council_trails/` folder — just click the file path shown after each session.
 
-### 🔧 Direct Mode (No Deliberation)
+### 🔧 Direct Mode — Ask One Model Directly
 
-Query models directly without the full Council deliberation — get raw responses instantly.
+Skip the full Council deliberation and ask a single model (or a few) directly.
 
+**Ask only Claude:**
 ```bash
-# Single model
-python3 skills/council/scripts/council.py --direct --models claude --query "Explain async/await" --human
-
-# Two models
-python3 skills/council/scripts/council.py --direct --models claude,gemini --query "Best database for IoT?" --human
-
-# All three models
-python3 skills/council/scripts/council.py --direct --models claude,gemini,codex --query "What model are you?" --human
+python3 skills/council/scripts/council.py --direct --models claude \
+  --query "Explain what is async/await in simple terms" --human
 ```
 
-**Output:**
-```
-============================================================
-🤖 CLAUDE (29613ms)
-============================================================
-Claude Opus 4.5 by Anthropic.
-
-============================================================
-🤖 GEMINI (12845ms)
-============================================================
-I am a large language model.
-
-============================================================
-🤖 CODEX (7790ms)
-============================================================
-ChatGPT language model by OpenAI.
+**Ask only Gemini:**
+```bash
+python3 skills/council/scripts/council.py --direct --models gemini \
+  --query "What is the best database for IoT projects?" --human
 ```
 
-Use `--direct` for:
-- Quick single-model queries
-- Model availability testing
-- Raw response comparison (no synthesis)
+**Ask only Codex:**
+```bash
+python3 skills/council/scripts/council.py --direct --models codex \
+  --query "Write a Python function to sort a list" --human
+```
 
-### 📊 Check Model Status & Usage
+**Compare two models (Claude and Gemini):**
+```bash
+python3 skills/council/scripts/council.py --direct --models claude,gemini \
+  --query "What are the pros and cons of microservices?" --human
+```
 
-**Check if all models are working:**
+**Ask all three models the same question:**
+```bash
+python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
+  --query "What AI model are you? Answer in one sentence." --human
+```
+
+### 📊 Check if Models are Working
+
+**Verify all CLIs are installed:**
 ```bash
 python3 skills/council/scripts/council.py --check
 ```
 
-**Ask each model directly (natural language):**
+**Quick test — ask all models to respond:**
 ```bash
-# "Are you working?"
 python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
-  --query "Say OK if you are working" --human
-
-# "What model are you?"
-python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
-  --query "What is your name and version?" --human
-
-# "What can you do?"
-python3 skills/council/scripts/council.py --direct --models codex \
-  --query "What tools do you have access to?" --human
+  --query "Just say OK if you can hear me" --human
 ```
 
-**Quick ping all models:**
+**Ask each model to identify itself:**
 ```bash
 python3 skills/council/scripts/council.py --direct --models claude,gemini,codex \
-  --query "Respond with just: OK" --human --timeout 30
+  --query "What is your name and who made you?" --human
+```
+
+**Check what tools Codex has access to:**
+```bash
+python3 skills/council/scripts/council.py --direct --models codex \
+  --query "List the tools you have access to" --human
 ```
 
 <details>
-<summary>📈 Check Remaining Quota (Web Dashboards)</summary>
+<summary>📈 Check Your Remaining Quota</summary>
 
-Models don't expose quota via CLI, but you can check online:
+Models don't show quota via command line. Check your usage online:
 
-| Model | Dashboard |
-|-------|-----------|
+| Model | Where to Check |
+|-------|----------------|
 | Claude | [console.anthropic.com/settings/usage](https://console.anthropic.com/settings/usage) |
 | Gemini | [aistudio.google.com](https://aistudio.google.com) |
 | Codex | [platform.openai.com/usage](https://platform.openai.com/usage) |
