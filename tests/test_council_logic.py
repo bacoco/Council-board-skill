@@ -12,7 +12,7 @@ from core.models import LLMResponse, SessionConfig
 from core.convergence import check_convergence
 from core.personas import generate_personas_with_llm
 from core.state import DegradationState
-from core.adapters import ADAPTERS, check_cli_available
+from core.adapters import ADAPTERS, check_model_available
 from persona_manager import Persona, PersonaManager
 from modes.consensus import gather_opinions
 from modes.adaptive import run_adaptive_cascade
@@ -20,7 +20,7 @@ from modes.adaptive import run_adaptive_cascade
 # Create module-like object for monkeypatching
 class CouncilModule:
     ADAPTERS = ADAPTERS
-    check_cli_available = staticmethod(check_cli_available)
+    check_model_available = staticmethod(check_model_available)
     generate_personas_with_llm = staticmethod(generate_personas_with_llm)
     ADAPTIVE_TIMEOUT = None
     DEGRADATION_STATE = None

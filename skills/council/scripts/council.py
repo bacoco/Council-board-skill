@@ -20,7 +20,7 @@ from security.input_validator import validate_and_sanitize
 # Import from core modules
 from core.models import SessionConfig
 from core.emit import emit, set_output_mode
-from core.adapters import expand_models_with_fallback, ADAPTERS, check_cli_available
+from core.adapters import expand_models_with_fallback, ADAPTERS, check_model_available
 
 # Import mode implementations
 from modes.consensus import run_council
@@ -279,14 +279,14 @@ async def run_direct(models: list, query: str, timeout: int, human: bool):
         model = model.strip()
 
         # Check availability
-        if not check_cli_available(model):
+        if not check_model_available(model):
             if human:
-                print(f"\n❌ {model.upper()}: CLI not available")
+                print(f"\n❌ {model.upper()}: Provider not available")
             else:
                 print(json.dumps({
                     "model": model,
                     "success": False,
-                    "error": "CLI not available"
+                    "error": "Provider not available"
                 }))
             continue
 

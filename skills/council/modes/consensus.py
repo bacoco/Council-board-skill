@@ -27,7 +27,7 @@ from core.state import (
 from core.metrics import init_metrics, get_metrics
 from core.parsing import get_parsed_json
 from core.convergence import check_convergence
-from core.adapters import ADAPTERS, check_cli_available
+from core.adapters import ADAPTERS, check_model_available
 from core.prompts import build_opinion_prompt, build_context_from_previous_rounds
 from core.personas import generate_personas_with_llm
 from core.review import peer_review, extract_contradictions
@@ -99,7 +99,7 @@ async def gather_opinions(
                 excluded_models.append({"model": model_instance, "round": round_num, "reason": "circuit_breaker_open", "status": "SKIPPED"})
             continue
 
-        if base_model in ADAPTERS and check_cli_available(base_model):
+        if base_model in ADAPTERS and check_model_available(base_model):
             available_models.append(model_instance)
 
             # Get dynamic persona for this model index
@@ -136,11 +136,11 @@ async def gather_opinions(
             tasks.append(ADAPTERS[base_model](prompt, model_timeout))
             model_index += 1
         else:
-            emit({"type": "opinion_error", "model": model_instance, "error": "CLI not available", "status": "ABSTENTION"})
+            emit({"type": "opinion_error", "model": model_instance, "error": "Provider not available", "status": "ABSTENTION"})
             if degradation:
-                degradation.record_model_unavailable(model_instance, "cli_not_available")
+                degradation.record_model_unavailable(model_instance, "provider_not_available")
             if excluded_models is not None:
-                excluded_models.append({"model": model_instance, "round": round_num, "reason": "cli_not_available", "status": "SKIPPED"})
+                excluded_models.append({"model": model_instance, "round": round_num, "reason": "provider_not_available", "status": "SKIPPED"})
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

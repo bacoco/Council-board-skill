@@ -24,7 +24,7 @@ from core.state import (
 )
 from core.metrics import init_metrics
 from core.parsing import get_parsed_json
-from core.adapters import ADAPTERS, check_cli_available
+from core.adapters import ADAPTERS, check_model_available
 from core.prompts import build_vote_prompt, build_vote_synthesis_prompt
 from core.personas import generate_personas_with_llm
 
@@ -121,11 +121,11 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
                 degradation.record_model_unavailable(model_instance, "circuit_breaker_open")
             continue
 
-        if base_model in ADAPTERS and check_cli_available(base_model):
+        if base_model in ADAPTERS and check_model_available(base_model):
             available_models.append(model_instance)
         else:
             if degradation:
-                degradation.record_model_unavailable(model_instance, "cli_not_available")
+                degradation.record_model_unavailable(model_instance, "provider_not_available")
 
     if not available_models:
         emit({"type": "error", "msg": "No models available for voting"})
@@ -432,7 +432,7 @@ async def run_vote_council(config: SessionConfig) -> dict:
     }
     synthesis_error = None
 
-    if config.chairman in ADAPTERS and check_cli_available(config.chairman):
+    if config.chairman in ADAPTERS and check_model_available(config.chairman):
         result = await ADAPTERS[config.chairman](synthesis_prompt, config.timeout)
         if result.success:
             parsed = get_parsed_json(result)

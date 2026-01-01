@@ -1,51 +1,39 @@
 """
-CLI adapters for model queries.
+Model adapters for Council queries.
 
-Provides unified interface for querying Claude, Gemini, and Codex CLIs.
+Provides unified interface for querying Claude, Gemini, and Codex.
+Uses SDK providers when available (with streaming), falls back to CLI.
 Includes retry logic, circuit breaker protection, and chairman failover.
 """
 
 import asyncio
 import functools
-import json
 import random
 import shutil
 import time
-from pathlib import Path
-from typing import List, Optional, TYPE_CHECKING
+from typing import AsyncIterator, Dict, List, Optional, TYPE_CHECKING
 
-from .models import LLMResponse, CLIConfig
+from .models import LLMResponse
 from .emit import emit, emit_perf_metric
 from .state import CIRCUIT_BREAKER, DEFAULT_TIMEOUT
 from .retry import is_retriable_error
+
+# Import provider factory
+from model_providers import get_provider, get_available_providers, get_provider_info, ProviderProtocol
 
 if TYPE_CHECKING:
     from .models import SessionConfig
 
 
-def _cleanup_subprocess(proc) -> None:
-    """
-    Safely cleanup a subprocess by closing pipes and killing the process.
-
-    Closes stdin/stdout/stderr first to prevent event loop warnings,
-    then kills the process. Silently ignores any errors during cleanup.
-    """
-    if proc is None:
-        return
-    try:
-        if proc.stdin:
-            proc.stdin.close()
-        if proc.stdout:
-            proc.stdout.close()
-        if proc.stderr:
-            proc.stderr.close()
-        proc.kill()
-    except Exception:
-        pass  # Cleanup errors are non-fatal
+# Cache for providers (one per model)
+_PROVIDER_CACHE: Dict[str, ProviderProtocol] = {}
 
 
-# Cache for project root (computed once per session)
-_PROJECT_ROOT_CACHE: Optional[Path] = None
+def _get_cached_provider(model: str) -> ProviderProtocol:
+    """Get a cached provider for the model."""
+    if model not in _PROVIDER_CACHE:
+        _PROVIDER_CACHE[model] = get_provider(model, prefer_streaming=True)
+    return _PROVIDER_CACHE[model]
 
 
 @functools.lru_cache(maxsize=32)
@@ -87,9 +75,26 @@ async def check_cli_available_async(cli: str) -> bool:
     return available
 
 
+def check_model_available(model: str) -> bool:
+    """
+    Check if a model is available via any provider (SDK or CLI).
+
+    Args:
+        model: Model name to check
+
+    Returns:
+        True if the model is available
+    """
+    try:
+        provider = get_provider(model)
+        return provider.is_available()
+    except (ValueError, RuntimeError):
+        return False
+
+
 def get_available_models(requested_models: List[str]) -> List[str]:
     """
-    Detect which CLI tools are available.
+    Detect which models are available (via SDK or CLI).
 
     Args:
         requested_models: List of model names to check
@@ -99,7 +104,7 @@ def get_available_models(requested_models: List[str]) -> List[str]:
     """
     available = []
     for model in requested_models:
-        if check_cli_available(model):
+        if check_model_available(model):
             available.append(model)
     return available
 
@@ -123,7 +128,7 @@ def expand_models_with_fallback(requested_models: List[str], min_models: int = 3
     available = get_available_models(requested_models)
 
     if len(available) == 0:
-        raise RuntimeError("No model CLIs are available. Please install and authenticate at least one of: claude, gemini, codex")
+        raise RuntimeError("No models are available. Please install and authenticate at least one of: claude, gemini, codex")
 
     if len(available) < min_models:
         # Warn about degraded operation - DegradationState will apply confidence penalty
@@ -137,139 +142,62 @@ def expand_models_with_fallback(requested_models: List[str], min_models: int = 3
     return available
 
 
-def find_project_root() -> Optional[Path]:
+async def query_model(model_name: str, prompt: str, timeout: int) -> LLMResponse:
     """
-    Find the project root directory by looking for common project markers.
+    Query a model using the best available provider.
 
-    Searches upward from current directory for .git, package.json, pyproject.toml, etc.
-    Result is cached for the session to avoid repeated filesystem lookups.
-
-    Returns:
-        Path to project root, or current directory if no markers found
-    """
-    global _PROJECT_ROOT_CACHE
-    if _PROJECT_ROOT_CACHE is not None:
-        return _PROJECT_ROOT_CACHE
-
-    cwd = Path.cwd()
-    markers = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'pom.xml']
-
-    for parent in [cwd] + list(cwd.parents):
-        for marker in markers:
-            if (parent / marker).exists():
-                _PROJECT_ROOT_CACHE = parent
-                return parent
-
-    # No marker found, use current directory
-    _PROJECT_ROOT_CACHE = cwd
-    return cwd
-
-
-async def query_cli(model_name: str, cli_config: CLIConfig, prompt: str, timeout: int) -> LLMResponse:
-    """
-    Generic CLI query function that works for all model CLIs.
+    Uses SDK providers when available (with streaming support),
+    falls back to CLI providers otherwise.
 
     Args:
-        model_name: Name of the model (for response tracking)
-        cli_config: CLI configuration (command, args, stdin usage)
+        model_name: Name of the model (claude, gemini, codex)
         prompt: The prompt to send to the model
         timeout: Timeout in seconds
 
     Returns:
         LLMResponse with content, latency, and success status
     """
-    start = time.time()
-    proc = None  # Track subprocess for cleanup on timeout/error
-
     try:
-        # Build command
-        cmd = [cli_config.name] + cli_config.args
-
-        # Get project root for CLI working directory
-        # This allows CLIs like codex to explore the project context
-        project_root = find_project_root()
-
-        # Create subprocess with project root as working directory
-        if cli_config.use_stdin:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=project_root
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(input=prompt.encode()),
-                timeout=timeout
-            )
-        else:
-            # Add prompt to args
-            cmd.extend(['-p', prompt])
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=project_root
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-
-        latency = int((time.time() - start) * 1000)
-
-        if proc.returncode == 0:
-            content = stdout.decode()
-
-            # Special handling for Claude's JSON output format
-            if model_name == 'claude' and '--output-format' in cmd:
-                try:
-                    data = json.loads(content)
-                    content = data.get('result', content)
-                except json.JSONDecodeError:
-                    pass  # Use raw content if not valid JSON
-
-            return LLMResponse(
-                content=content,
-                model=model_name,
-                latency_ms=latency,
-                success=True
-            )
-        else:
-            return LLMResponse(
-                content='',
-                model=model_name,
-                latency_ms=latency,
-                success=False,
-                error=stderr.decode()
-            )
-
-    except asyncio.TimeoutError:
-        latency = int((time.time() - start) * 1000)
-        _cleanup_subprocess(proc)
-        return LLMResponse(
-            content='',
-            model=model_name,
-            latency_ms=latency,
-            success=False,
-            error='TIMEOUT'
-        )
+        provider = _get_cached_provider(model_name)
+        return await provider.query(prompt, timeout)
     except Exception as e:
-        latency = int((time.time() - start) * 1000)
-        _cleanup_subprocess(proc)
         return LLMResponse(
             content='',
             model=model_name,
-            latency_ms=latency,
+            latency_ms=0,
             success=False,
             error=str(e)
         )
 
 
-async def query_cli_with_retry(model_name: str, cli_config: CLIConfig, prompt: str, timeout: int, max_retries: int = 3) -> LLMResponse:
+async def query_model_stream(model_name: str, prompt: str, timeout: int = 420) -> AsyncIterator[str]:
     """
-    Query CLI with exponential backoff retry logic and circuit breaker protection.
+    Query a model with streaming response.
+
+    Uses SDK providers when available for true streaming,
+    falls back to batch response for CLI providers.
 
     Args:
         model_name: Name of the model
-        cli_config: CLI configuration
+        prompt: The prompt to send
+        timeout: Timeout in seconds
+
+    Yields:
+        Text chunks as they become available
+    """
+    provider = _get_cached_provider(model_name)
+    async for chunk in provider.query_stream(prompt, timeout):
+        yield chunk
+
+
+async def query_with_retry(model_name: str, prompt: str, timeout: int, max_retries: int = 3) -> LLMResponse:
+    """
+    Query model with exponential backoff retry logic and circuit breaker protection.
+
+    Uses SDK providers when available, falls back to CLI.
+
+    Args:
+        model_name: Name of the model
         prompt: The prompt to send
         timeout: Timeout per attempt in seconds
         max_retries: Maximum number of retry attempts (default: 3)
@@ -290,7 +218,7 @@ async def query_cli_with_retry(model_name: str, cli_config: CLIConfig, prompt: s
     last_error = None
 
     for attempt in range(max_retries):
-        result = await query_cli(model_name, cli_config, prompt, timeout)
+        result = await query_model(model_name, prompt, timeout)
 
         # Success - record and return immediately
         if result.success:
@@ -326,39 +254,23 @@ async def query_cli_with_retry(model_name: str, cli_config: CLIConfig, prompt: s
     )
 
 
-# CLI configurations for each model
-CLI_CONFIGS = {
-    'claude': CLIConfig(
-        name='claude',
-        args=['--output-format', 'json'],
-        use_stdin=False
-    ),
-    'gemini': CLIConfig(
-        name='gemini',
-        args=[],
-        use_stdin=False
-    ),
-    'codex': CLIConfig(
-        name='codex',
-        args=['exec'],
-        use_stdin=True
-    ),
-}
-
-
 # Adapter functions (use retry logic for improved resilience)
 async def query_claude(prompt: str, timeout: int) -> LLMResponse:
-    return await query_cli_with_retry('claude', CLI_CONFIGS['claude'], prompt, timeout, max_retries=3)
+    """Query Claude using SDK (preferred) or CLI fallback."""
+    return await query_with_retry('claude', prompt, timeout, max_retries=3)
 
 
 async def query_gemini(prompt: str, timeout: int) -> LLMResponse:
-    return await query_cli_with_retry('gemini', CLI_CONFIGS['gemini'], prompt, timeout, max_retries=3)
+    """Query Gemini using SDK with ADC (preferred) or CLI fallback."""
+    return await query_with_retry('gemini', prompt, timeout, max_retries=3)
 
 
 async def query_codex(prompt: str, timeout: int) -> LLMResponse:
-    return await query_cli_with_retry('codex', CLI_CONFIGS['codex'], prompt, timeout, max_retries=3)
+    """Query Codex using CLI (no SDK without API key)."""
+    return await query_with_retry('codex', prompt, timeout, max_retries=3)
 
 
+# Backward-compatible ADAPTERS dict
 ADAPTERS = {
     'claude': query_claude,
     'gemini': query_gemini,
@@ -375,7 +287,7 @@ def get_chairman_with_fallback(preferred_chairman: str) -> str:
     Get a working chairman model with failover to alternates.
 
     If the preferred chairman (typically Claude) is unavailable due to circuit
-    breaker state or CLI unavailability, falls back to next available model.
+    breaker state or provider unavailability, falls back to next available model.
 
     Args:
         preferred_chairman: The configured chairman model (e.g., 'claude')
@@ -387,7 +299,7 @@ def get_chairman_with_fallback(preferred_chairman: str) -> str:
     fallback_order = [preferred_chairman] + [m for m in CHAIRMAN_FALLBACK_ORDER if m != preferred_chairman]
 
     for model in fallback_order:
-        if CIRCUIT_BREAKER.can_call(model) and check_cli_available(model):
+        if CIRCUIT_BREAKER.can_call(model) and check_model_available(model):
             if model != preferred_chairman:
                 emit({"type": "chairman_failover", "preferred": preferred_chairman, "using": model})
             return model
