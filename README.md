@@ -108,6 +108,59 @@ Every deliberation is automatically saved so you can see exactly how the AIs rea
 
 **Find your trails in:** `council_trails/` folder — just click the file path shown after each session.
 
+### 🔧 Direct Mode (No Deliberation)
+
+Query models directly without the full Council deliberation — get raw responses instantly.
+
+```bash
+# Single model
+python3 skills/council/scripts/council.py --direct --models claude --query "Explain async/await" --human
+
+# Two models
+python3 skills/council/scripts/council.py --direct --models claude,gemini --query "Best database for IoT?" --human
+
+# All three models
+python3 skills/council/scripts/council.py --direct --models claude,gemini,codex --query "What model are you?" --human
+```
+
+**Output:**
+```
+============================================================
+🤖 CLAUDE (29613ms)
+============================================================
+Claude Opus 4.5 by Anthropic.
+
+============================================================
+🤖 GEMINI (12845ms)
+============================================================
+I am a large language model.
+
+============================================================
+🤖 CODEX (7790ms)
+============================================================
+ChatGPT language model by OpenAI.
+```
+
+Use `--direct` for:
+- Quick single-model queries
+- Model availability testing
+- Raw response comparison (no synthesis)
+
+### 📊 Check Model Status & Usage
+
+```bash
+# Check all CLIs are installed
+python3 skills/council/scripts/council.py --check
+```
+
+**Remaining quota per model:**
+
+| Model | How to Check Quota |
+|-------|-------------------|
+| **Claude** | Check usage at [console.anthropic.com](https://console.anthropic.com) or via API |
+| **Gemini** | No daily limit exposed in CLI — check [aistudio.google.com](https://aistudio.google.com) |
+| **Codex** | `codex exec "What is your status?"` or check [platform.openai.com](https://platform.openai.com) |
+
 ### ⚙️ Customization
 
 You can adjust Council's behavior in the settings file `council.config.yaml`:
@@ -289,12 +342,12 @@ Reference guides in `skills/council/references/`:
 
 ## Recent Improvements
 
-Fixes from Council self-review (convergence: 0.926, confidence: 91%):
-
-- [x] **Trail IO Error Handling** — Added try/except around file writes for constrained filesystems
-- [x] **Thread-Safe State** — Added threading locks to prevent race conditions in global state
-- [x] **Subprocess Cleanup** — Factored duplicate cleanup code into `_cleanup_subprocess()` helper
-- [x] **Documentation** — Added "Known Limitations" section to SKILL.md
+- [x] **Direct Mode** — Query models directly with `--direct` flag, no deliberation
+- [x] **Timeout Flag Fixed** — `--timeout` now properly respected (was hardcoded to 420s)
+- [x] **Session State Reset** — All global state properly cleared between sessions
+- [x] **Trail IO Error Handling** — Added try/except for constrained filesystems
+- [x] **Thread-Safe State** — Added threading locks for concurrent safety
+- [x] **SOTA Skill Structure** — Refactored SKILL.md for progressive disclosure
 
 ## Roadmap
 
@@ -302,11 +355,9 @@ Future improvements identified by Council self-evaluation:
 
 - [ ] **Core Logic Tests** — Unit tests for deliberation engine, convergence algorithm, persona generation
 - [ ] **Persistent State** — Save circuit breaker state, metrics, adaptive timeouts across sessions (JSON/SQLite)
-- [ ] **Direct API Providers** — Bypass CLI fragility with native API implementations
 - [ ] **CI/CD Pipeline** — GitHub Actions, automated testing, version compatibility matrix
 - [ ] **Benchmarks** — Compare output quality/cost/latency vs single-model baselines
 - [ ] **Health Checks** — Endpoints for container orchestration, graceful SIGTERM handling
-- [ ] **Package Structure** — Replace sys.path.insert() with proper relative imports
 
 ## License
 
