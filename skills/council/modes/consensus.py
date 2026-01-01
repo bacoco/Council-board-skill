@@ -127,10 +127,9 @@ async def gather_opinions(
             # Get persona title for logging (always from dynamic_persona now)
             persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-            # Fixed timeout intentionally kept (not adaptive) - Codex requires 3-4 min
-            # for code exploration with tools. AdaptiveTimeout caused premature timeouts.
+            # Use config.timeout from user/config file (default: 420s for Codex tool exploration)
             # All models share same timeout since they run in parallel (wait = slowest).
-            model_timeout = MODEL_TIMEOUT
+            model_timeout = config.timeout
             model_timeouts.append(model_timeout)
 
             emit({"type": "opinion_start", "model": model_instance, "round": round_num, "persona": persona_title, "timeout": model_timeout})

@@ -150,8 +150,8 @@ async def collect_votes(config: SessionConfig) -> List[VoteBallot]:
         dynamic_persona = assigned_personas[idx] if idx < len(assigned_personas) else None
         persona_title = dynamic_persona.title if dynamic_persona else model_instance
 
-        # Fixed timeout intentionally kept - see gather_opinions() for rationale
-        model_timeout = MODEL_TIMEOUT
+        # Use config.timeout from user/config file (default: 420s for Codex tool exploration)
+        model_timeout = config.timeout
 
         emit({"type": "vote_start", "model": model_instance, "persona": persona_title, "timeout": model_timeout})
 
