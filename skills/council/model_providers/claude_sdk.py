@@ -2,7 +2,7 @@
 Claude SDK provider using the Claude Agent SDK.
 
 Uses the claude-agent-sdk package which authenticates via the bundled
-Claude Code CLI - no API key required.
+Claude Code CLI - no API key required. Auth is read from ~/.claude/.credentials.json
 """
 
 import asyncio
@@ -11,6 +11,7 @@ import time
 from typing import AsyncIterator, Optional
 
 from .base import BaseProvider
+from .local_auth import get_claude_auth
 from core.models import LLMResponse
 
 # Lazy import to avoid hard dependency
@@ -33,7 +34,7 @@ class ClaudeSDKProvider(BaseProvider):
     """
     Provider for Claude using the Claude Agent SDK.
 
-    Uses existing Claude Code CLI authentication - no API key needed.
+    Uses existing Claude Code CLI authentication from ~/.claude/.credentials.json
     Supports streaming responses.
     """
 
@@ -41,12 +42,15 @@ class ClaudeSDKProvider(BaseProvider):
         super().__init__('claude')
 
     def is_available(self) -> bool:
-        """Check if Claude SDK is available and CLI is authenticated."""
+        """Check if Claude SDK is available and local auth exists."""
         # Check if SDK is installed
         if not _check_claude_sdk():
             return False
-        # Check if Claude CLI is available (SDK uses it for auth)
-        return shutil.which('claude') is not None
+        # Check if Claude CLI is available (SDK uses it)
+        if not shutil.which('claude'):
+            return False
+        # Check if local auth is available
+        return get_claude_auth() is not None
 
     def supports_streaming(self) -> bool:
         """Claude SDK natively supports streaming."""

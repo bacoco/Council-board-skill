@@ -31,12 +31,21 @@ def _get_gemini_sdk_provider():
         return None
 
 
+def _get_codex_sdk_provider():
+    """Lazy import of Codex SDK provider."""
+    try:
+        from .codex_sdk import CodexSDKProvider
+        return CodexSDKProvider
+    except ImportError:
+        return None
+
+
 # Provider preference order per model
-# First available provider is used
+# SDK preferred (uses local auth), CLI as fallback
 PROVIDER_PREFERENCES: Dict[str, List[str]] = {
-    'claude': ['sdk', 'cli'],   # Prefer Claude Agent SDK (auth via CLI), fallback to CLI
-    'gemini': ['cli'],          # Gemini CLI only (SDK requires Google Cloud - NO)
-    'codex': ['cli'],           # Codex CLI only (SDK requires API key - NO)
+    'claude': ['sdk', 'cli'],   # Claude Agent SDK (local auth ~/.claude/)
+    'gemini': ['sdk', 'cli'],   # Gemini SDK (local auth ~/.gemini/ or GEMINI_API_KEY)
+    'codex': ['sdk', 'cli'],    # OpenAI SDK (local auth ~/.codex/auth.json)
 }
 
 
@@ -99,7 +108,10 @@ def _try_get_provider(model: str, provider_type: str) -> Optional[ProviderProtoc
             provider_class = _get_gemini_sdk_provider()
             if provider_class:
                 return provider_class()
-        # Codex has no SDK without API key
+        elif model == 'codex':
+            provider_class = _get_codex_sdk_provider()
+            if provider_class:
+                return provider_class()
         return None
 
     elif provider_type == 'cli':

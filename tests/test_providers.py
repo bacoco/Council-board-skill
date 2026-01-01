@@ -118,19 +118,12 @@ class TestProviderFactory:
         assert "gemini" in PROVIDER_PREFERENCES
         assert "codex" in PROVIDER_PREFERENCES
 
-    def test_codex_only_has_cli(self):
-        """Codex should only have CLI provider (no SDK without API key)."""
-        assert PROVIDER_PREFERENCES["codex"] == ["cli"]
-
-    def test_gemini_only_has_cli(self):
-        """Gemini should only have CLI provider (SDK requires Google Cloud)."""
-        assert PROVIDER_PREFERENCES["gemini"] == ["cli"]
-
-    def test_claude_prefers_sdk(self):
-        """Claude should prefer SDK over CLI."""
-        prefs = PROVIDER_PREFERENCES["claude"]
-        assert prefs[0] == "sdk"
-        assert "cli" in prefs
+    def test_all_models_prefer_sdk(self):
+        """All models should prefer SDK (with local auth), CLI as fallback."""
+        for model in ['claude', 'gemini', 'codex']:
+            prefs = PROVIDER_PREFERENCES[model]
+            assert prefs[0] == "sdk", f"{model} should prefer SDK"
+            assert "cli" in prefs, f"{model} should have CLI fallback"
 
     @patch("model_providers.factory._get_claude_sdk_provider")
     @patch("shutil.which")

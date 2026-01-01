@@ -1,21 +1,22 @@
 """
 Gemini SDK provider using Google Generative AI.
 
-Uses Application Default Credentials (ADC) for authentication.
-No explicit API key required if gcloud auth is configured.
+Uses local auth from ~/.gemini/ or GEMINI_API_KEY env var.
+NO Google Cloud ADC - purely local authentication.
 """
 
 import asyncio
+import os
 import shutil
 import time
 from typing import AsyncIterator, Optional
 
 from .base import BaseProvider
+from .local_auth import get_gemini_auth
 from core.models import LLMResponse
 
 # Lazy import to avoid hard dependency
 _gemini_sdk_available: Optional[bool] = None
-_adc_available: Optional[bool] = None
 
 
 def _check_gemini_sdk() -> bool:
@@ -30,25 +31,12 @@ def _check_gemini_sdk() -> bool:
     return _gemini_sdk_available
 
 
-def _check_adc() -> bool:
-    """Check if Application Default Credentials are available."""
-    global _adc_available
-    if _adc_available is None:
-        try:
-            import google.auth
-            credentials, project = google.auth.default()
-            _adc_available = credentials is not None
-        except Exception:
-            _adc_available = False
-    return _adc_available
-
-
 class GeminiSDKProvider(BaseProvider):
     """
     Provider for Gemini using Google Generative AI SDK.
 
-    Uses Application Default Credentials (ADC) - no explicit API key needed.
-    Requires: gcloud auth application-default login
+    Uses local auth (GEMINI_API_KEY env or ~/.gemini/).
+    NO Google Cloud required.
     Supports streaming responses.
     """
 
@@ -56,26 +44,38 @@ class GeminiSDKProvider(BaseProvider):
         super().__init__('gemini')
         self._model_id = model_name
         self._model = None
+        self._configured = False
+
+    def _configure_sdk(self):
+        """Configure the SDK with local auth."""
+        if self._configured:
+            return
+
+        auth = get_gemini_auth()
+        if auth:
+            import google.generativeai as genai
+            genai.configure(api_key=auth.token)
+            self._configured = True
 
     def _get_model(self):
         """Lazy initialization of the Gemini model."""
         if self._model is None:
+            self._configure_sdk()
             import google.generativeai as genai
-            # ADC will be used automatically if available
-            # No explicit configure() call needed with ADC
             self._model = genai.GenerativeModel(self._model_id)
         return self._model
 
     def is_available(self) -> bool:
-        """Check if Gemini SDK and ADC are available."""
+        """Check if Gemini SDK and local auth are available."""
         # Check if SDK is installed
         if not _check_gemini_sdk():
             return False
-        # Check if ADC is configured (gcloud auth)
-        if not _check_adc():
-            # Fallback: check if gemini CLI is available
-            return shutil.which('gemini') is not None
-        return True
+        # Check if local auth is available
+        auth = get_gemini_auth()
+        if auth:
+            return True
+        # Fallback: check if gemini CLI is available
+        return shutil.which('gemini') is not None
 
     def supports_streaming(self) -> bool:
         """Gemini SDK natively supports streaming."""
@@ -98,7 +98,7 @@ class GeminiSDKProvider(BaseProvider):
                 model=self._name,
                 latency_ms=0,
                 success=False,
-                error='Gemini SDK not available or ADC not configured'
+                error='Gemini SDK not available or no local auth'
             )
 
         start = time.time()
@@ -136,7 +136,7 @@ class GeminiSDKProvider(BaseProvider):
             Text chunks as they become available.
         """
         if not self.is_available():
-            raise RuntimeError('Gemini SDK not available or ADC not configured')
+            raise RuntimeError('Gemini SDK not available or no local auth')
 
         try:
             model = self._get_model()
