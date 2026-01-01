@@ -342,17 +342,28 @@ Reference guides in `skills/council/references/`:
 ## Recent Improvements
 
 - [x] **Direct Mode** — Query models directly with `--direct` flag, no deliberation
+- [x] **Natural Language Triggers** — "Ask Claude directly", "Just Gemini's opinion", etc.
+- [x] **Peer Review Score Fix** — Auto-detect 0-5 vs 0-20 scale, display correct totals
+- [x] **Skill Cleanup** — Tests and trails moved outside skill package (72KB → 35 files)
 - [x] **Timeout Flag Fixed** — `--timeout` now properly respected (was hardcoded to 420s)
 - [x] **Session State Reset** — All global state properly cleared between sessions
 - [x] **Trail IO Error Handling** — Added try/except for constrained filesystems
 - [x] **Thread-Safe State** — Added threading locks for concurrent safety
 - [x] **SOTA Skill Structure** — Refactored SKILL.md for progressive disclosure
 
+## Development
+
+Run tests from project root:
+
+```bash
+python3 -m pytest tests/ -v
+```
+
 ## Roadmap
 
 Future improvements identified by Council self-evaluation:
 
-- [ ] **Core Logic Tests** — Unit tests for deliberation engine, convergence algorithm, persona generation
+- [x] **Core Logic Tests** — Unit tests for deliberation engine, convergence algorithm, persona generation
 - [ ] **Persistent State** — Save circuit breaker state, metrics, adaptive timeouts across sessions (JSON/SQLite)
 - [ ] **CI/CD Pipeline** — GitHub Actions, automated testing, version compatibility matrix
 - [ ] **Benchmarks** — Compare output quality/cost/latency vs single-model baselines
