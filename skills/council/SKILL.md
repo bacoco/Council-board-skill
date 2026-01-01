@@ -95,6 +95,10 @@ Lines starting with `### filename.ext` are loaded automatically.
 - [references/output-format.md](references/output-format.md) - Response templates
 - [references/examples.md](references/examples.md) - Usage examples
 
+## Architecture Note
+
+Council uses `sys.path.insert()` for imports to enable direct CLI invocation (`python3 scripts/council.py`). This is intentional - relative imports would require running as a module (`python -m council.scripts.council`), breaking the user-friendly CLI interface. The root `__init__.py` provides package organization while maintaining CLI usability.
+
 ## Configuration
 
 Persistent settings via `council.config.yaml`:

@@ -433,3 +433,22 @@ def get_adaptive_timeout() -> Optional[AdaptiveTimeout]:
     """Get current adaptive timeout manager (thread-safe read)."""
     with _STATE_LOCK:
         return ADAPTIVE_TIMEOUT
+
+
+def reset_session_state() -> None:
+    """
+    Reset ALL global state for a fresh session.
+
+    Call this at the start of each council session to prevent
+    cross-session state contamination. Thread-safe.
+
+    Resets:
+    - CIRCUIT_BREAKER: All model states to CLOSED
+    - DEGRADATION_STATE: Cleared (re-init via init_degradation)
+    - ADAPTIVE_TIMEOUT: Cleared (re-init via init_degradation)
+    """
+    global DEGRADATION_STATE, ADAPTIVE_TIMEOUT
+    with _STATE_LOCK:
+        CIRCUIT_BREAKER.reset()
+        DEGRADATION_STATE = None
+        ADAPTIVE_TIMEOUT = None

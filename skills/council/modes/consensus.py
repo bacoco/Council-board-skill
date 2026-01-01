@@ -20,7 +20,7 @@ from persona_manager import Persona
 from core.models import LLMResponse, SessionConfig
 from core.emit import emit, emit_perf_metric, emit_perf_metrics
 from core.state import (
-    CIRCUIT_BREAKER, DegradationLevel, DEFAULT_TIMEOUT,
+    CIRCUIT_BREAKER, DegradationLevel, DEFAULT_TIMEOUT, reset_session_state,
     init_degradation, get_degradation_state, get_adaptive_timeout,
     get_base_model
 )
@@ -212,8 +212,8 @@ async def run_council(config: SessionConfig, escalation_allowed: bool = True) ->
     session_id = f"council-{int(time.time())}"
     start_time = time.time()
 
-    # Reset circuit breaker state for new session to prevent cross-session contamination
-    CIRCUIT_BREAKER.reset()
+    # Reset ALL global state for new session to prevent cross-session contamination
+    reset_session_state()
 
     # Enable or disable perf instrumentation for this session
     # Note: We use the module-level variable from emit

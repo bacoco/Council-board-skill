@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.models import LLMResponse, SessionConfig, VoteBallot, VoteResult
 from core.emit import emit, emit_perf_metrics
 from core.state import (
-    CIRCUIT_BREAKER, DegradationLevel, DEFAULT_TIMEOUT,
+    CIRCUIT_BREAKER, DegradationLevel, DEFAULT_TIMEOUT, reset_session_state,
     init_degradation, get_degradation_state, get_adaptive_timeout,
     get_base_model
 )
@@ -347,8 +347,8 @@ async def run_vote_council(config: SessionConfig) -> dict:
     session_id = f"vote-{int(time.time())}"
     start_time = time.time()
 
-    # Reset circuit breaker state for new session to prevent cross-session contamination
-    CIRCUIT_BREAKER.reset()
+    # Reset ALL global state for new session to prevent cross-session contamination
+    reset_session_state()
 
     # Enable or disable perf instrumentation for this session
     if config.enable_perf_metrics:
