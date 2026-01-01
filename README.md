@@ -114,11 +114,13 @@ Skip the full Council deliberation and ask a single model (or a few) directly.
 
 | What you say | What happens |
 |--------------|--------------|
-| *"Ask Claude: explain async/await in simple terms"* | Claude responds directly |
-| *"Use Gemini to find the best database for IoT"* | Gemini responds directly |
-| *"Have Codex write a Python sort function"* | Codex responds directly |
-| *"Ask Claude and Gemini: pros of microservices?"* | Both respond (no synthesis) |
-| *"Query all models: what AI are you?"* | All 3 respond sequentially |
+| *"What does Claude think about this?"* | Claude responds directly |
+| *"Just Gemini's opinion please"* | Gemini responds directly |
+| *"Quick answer from Codex"* | Codex responds directly |
+| *"Skip the council, ask Claude"* | Claude only, no deliberation |
+| *"Run this by Gemini real quick"* | Fast Gemini response |
+| *"Get Claude and Gemini's take"* | Both respond (no synthesis) |
+| *"All models, no debate"* | All 3 respond sequentially |
 
 ### 📊 Check if Models are Working
 

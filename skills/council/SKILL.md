@@ -55,13 +55,26 @@ python3 ${SKILL_ROOT}/scripts/council.py --direct --models claude --query "[ques
 python3 ${SKILL_ROOT}/scripts/council.py --direct --models claude,gemini --query "[question]" --human
 ```
 
-**When user says** → **Use this command**:
-- "Ask Claude directly: X" → `--direct --models claude`
-- "Use Gemini to explain Y" → `--direct --models gemini`
-- "Ask Codex to write Z" → `--direct --models codex`
-- "Ask Claude and Gemini: X" → `--direct --models claude,gemini`
-- "Query all models: X" → `--direct --models claude,gemini,codex`
-- "Ask the council: X" → No `--direct` flag (full deliberation)
+**Detect direct mode from natural language:**
+
+| User says | Use |
+|-----------|-----|
+| "What does Claude think about X?" | `--direct --models claude` |
+| "Just Gemini's opinion please" | `--direct --models gemini` |
+| "Quick answer from Codex" | `--direct --models codex` |
+| "Skip the council, ask Claude" | `--direct --models claude` |
+| "No debate—just Gemini" | `--direct --models gemini` |
+| "Claude only: is this correct?" | `--direct --models claude` |
+| "Run this by Codex real quick" | `--direct --models codex` |
+| "Get Claude and Gemini's take" | `--direct --models claude,gemini` |
+| "All models, no synthesis" | `--direct --models claude,gemini,codex` |
+| "Ask the council about X" | Full deliberation (no --direct) |
+
+**Trigger keywords for direct mode:**
+- Exclusivity: "only", "just", "solo", "single"
+- Speed: "quick", "fast", "real quick"
+- Bypass: "skip the council", "no debate", "no deliberation"
+- Model-specific: "Claude thinks", "Gemini's opinion", "Codex's take"
 
 ## Key Options
 
