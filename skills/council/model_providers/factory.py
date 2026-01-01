@@ -34,9 +34,9 @@ def _get_gemini_sdk_provider():
 # Provider preference order per model
 # First available provider is used
 PROVIDER_PREFERENCES: Dict[str, List[str]] = {
-    'claude': ['sdk', 'cli'],   # Prefer Claude Agent SDK, fallback to CLI
-    'gemini': ['sdk', 'cli'],   # Prefer Gemini SDK with ADC, fallback to CLI
-    'codex': ['cli'],           # Codex only has CLI (no SDK without API key)
+    'claude': ['sdk', 'cli'],   # Prefer Claude Agent SDK (auth via CLI), fallback to CLI
+    'gemini': ['cli'],          # Gemini CLI only (SDK requires Google Cloud - NO)
+    'codex': ['cli'],           # Codex CLI only (SDK requires API key - NO)
 }
 
 

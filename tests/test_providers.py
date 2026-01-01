@@ -122,6 +122,10 @@ class TestProviderFactory:
         """Codex should only have CLI provider (no SDK without API key)."""
         assert PROVIDER_PREFERENCES["codex"] == ["cli"]
 
+    def test_gemini_only_has_cli(self):
+        """Gemini should only have CLI provider (SDK requires Google Cloud)."""
+        assert PROVIDER_PREFERENCES["gemini"] == ["cli"]
+
     def test_claude_prefers_sdk(self):
         """Claude should prefer SDK over CLI."""
         prefs = PROVIDER_PREFERENCES["claude"]
