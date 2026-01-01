@@ -20,7 +20,7 @@ from security.input_validator import validate_and_sanitize
 # Import from core modules
 from core.models import SessionConfig
 from core.emit import emit, set_output_mode
-from core.adapters import expand_models_with_fallback
+from core.adapters import expand_models_with_fallback, ADAPTERS, check_cli_available
 
 # Import mode implementations
 from modes.consensus import run_council
@@ -265,6 +265,63 @@ def load_context_from_file(context_path: Path, existing_context: str = '') -> st
 
 
 # ============================================================================
+# Direct Mode
+# ============================================================================
+
+async def run_direct(models: list, query: str, timeout: int, human: bool):
+    """
+    Call models directly without deliberation, show raw responses.
+
+    Sequential execution for ordered output. No personas, no synthesis,
+    no peer review - just raw CLI responses.
+    """
+    for model in models:
+        model = model.strip()
+
+        # Check availability
+        if not check_cli_available(model):
+            if human:
+                print(f"\n❌ {model.upper()}: CLI not available")
+            else:
+                print(json.dumps({
+                    "model": model,
+                    "success": False,
+                    "error": "CLI not available"
+                }))
+            continue
+
+        # Query the model
+        try:
+            response = await ADAPTERS[model](query, timeout)
+
+            if human:
+                print(f"\n{'='*60}")
+                print(f"🤖 {model.upper()} ({response.latency_ms}ms)")
+                print(f"{'='*60}")
+                if response.success:
+                    print(response.content)
+                else:
+                    print(f"Error: {response.error}")
+            else:
+                print(json.dumps({
+                    "model": model,
+                    "success": response.success,
+                    "latency_ms": response.latency_ms,
+                    "content": response.content if response.success else None,
+                    "error": response.error
+                }))
+        except Exception as e:
+            if human:
+                print(f"\n❌ {model.upper()}: {str(e)}")
+            else:
+                print(json.dumps({
+                    "model": model,
+                    "success": False,
+                    "error": str(e)
+                }))
+
+
+# ============================================================================
 # CLI
 # ============================================================================
 
@@ -304,6 +361,12 @@ def main():
         default=False,
         help='Human-readable output instead of JSON (recommended for interactive use)'
     )
+    parser.add_argument(
+        '--direct',
+        action='store_true',
+        default=False,
+        help='Call models directly without deliberation, show raw responses'
+    )
 
     args = parser.parse_args()
 
@@ -318,6 +381,17 @@ def main():
         results = check_setup()
         all_ok = print_setup_status(results)
         sys.exit(0 if all_ok else 1)
+
+    # ============================================================================
+    # Direct Mode: Call models directly without deliberation
+    # ============================================================================
+
+    if args.direct:
+        if not args.query:
+            parser.error("--query is required for --direct mode")
+        models = [m.strip() for m in args.models.split(',')]
+        asyncio.run(run_direct(models, args.query, args.timeout, args.human))
+        sys.exit(0)
 
     # Validate --query is provided when not in check mode
     if not args.query:
