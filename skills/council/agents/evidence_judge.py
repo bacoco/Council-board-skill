@@ -7,20 +7,21 @@ The Evidence Judge:
 3. Flags unsupported and contradicted claims
 4. Calculates evidence-based confidence adjustments
 
-Implementation: Uses text-matching heuristics for claim-evidence relevance.
-Future: Can be enhanced with LLM-based semantic matching.
+Implementation: Uses semantic embeddings for claim-evidence relevance matching.
+Falls back to term-overlap if embeddings unavailable.
 """
 
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable, Tuple
 
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from knowledge_base import KnowledgeBase, Claim, Source, ClaimStatus
+from core.embeddings import SemanticMatcher, get_semantic_matcher, SimilarityResult
 
 
 # Common stop words to filter from term extraction
@@ -126,11 +127,15 @@ class EvidenceJudge:
     """
     Evaluates claims against evidence sources.
 
-    Uses text-matching heuristics to determine if evidence supports claims:
-    - Extracts key terms from claims
-    - Checks for term presence in evidence snippets
-    - Scores relevance based on overlap
-    - Adjusts confidence based on evidence quality
+    Uses semantic embeddings for claim-evidence relevance matching:
+    - Computes semantic similarity between claims and evidence snippets
+    - Falls back to term-overlap if embeddings unavailable
+    - Adjusts confidence based on evidence quality and relevance
+
+    Semantic matching modes:
+    1. Local embeddings (sentence-transformers) - fast, requires install
+    2. LLM-judged similarity - accurate, slower
+    3. Term overlap fallback - always available
     """
 
     # Confidence adjustment factors
@@ -138,14 +143,33 @@ class EvidenceJudge:
     CONTRADICTION_PENALTY = 0.25  # Penalty for contradicting evidence
     NO_EVIDENCE_PENALTY = 0.1  # Penalty for no evidence at all
 
-    def __init__(self, kb: KnowledgeBase):
+    # Semantic similarity thresholds
+    HIGH_RELEVANCE_THRESHOLD = 0.7   # Strong semantic match
+    LOW_RELEVANCE_THRESHOLD = 0.3    # Weak match, treat as partial
+
+    def __init__(self, kb: KnowledgeBase,
+                 use_semantic: bool = True,
+                 llm_adapter: Optional[Callable] = None):
         """
         Initialize Evidence Judge.
 
         Args:
             kb: KnowledgeBase with claims and sources to evaluate
+            use_semantic: If True, use semantic embedding matching
+            llm_adapter: Optional async LLM function for similarity judgment
         """
         self.kb = kb
+        self._use_semantic = use_semantic
+        self._semantic_matcher = SemanticMatcher(
+            use_local_embeddings=True,
+            llm_adapter=llm_adapter
+        ) if use_semantic else None
+        self._similarity_stats: Dict[str, int] = {
+            'embedding': 0,
+            'llm': 0,
+            'term_overlap': 0,
+            'cached': 0
+        }
 
     async def evaluate_all_claims(self) -> EvidenceReport:
         """
@@ -215,32 +239,35 @@ class EvidenceJudge:
         """
         Evaluate a single claim against evidence.
 
-        Uses text-matching heuristics:
-        1. Extract key terms from claim
-        2. Check for term overlap with evidence snippets
-        3. Score relevance based on matches
-        4. Adjust confidence accordingly
+        Uses semantic similarity for claim-evidence matching:
+        1. Compute semantic similarity between claim and evidence snippets
+        2. Score relevance using embeddings or term overlap
+        3. Adjust confidence based on evidence quality
         """
         evidence_links = []
         adjusted_confidence = claim.confidence
 
-        # Extract key terms from claim for matching
-        claim_terms = self._extract_terms(claim.text)
-
-        # Process supporting evidence with relevance scoring
+        # Process supporting evidence with semantic relevance scoring
         for source_id in claim.support_evidence_ids:
             source = self.kb.get_source(source_id)
             if source:
-                # Calculate relevance based on term overlap
-                relevance = self._calculate_relevance(claim_terms, source.snippet)
-                relation = EvidenceRelation.SUPPORTS if relevance > 0.3 else EvidenceRelation.PARTIAL
+                # Calculate semantic relevance
+                relevance, method = await self._calculate_relevance(claim.text, source.snippet)
+
+                # Use thresholds for relation classification
+                if relevance >= self.HIGH_RELEVANCE_THRESHOLD:
+                    relation = EvidenceRelation.SUPPORTS
+                elif relevance >= self.LOW_RELEVANCE_THRESHOLD:
+                    relation = EvidenceRelation.PARTIAL
+                else:
+                    relation = EvidenceRelation.PARTIAL
 
                 evidence_links.append(ClaimEvidenceLink(
                     claim_id=claim.id,
                     source_id=source_id,
                     relation=relation,
                     confidence=source.reliability * relevance,
-                    rationale=f"Term overlap: {relevance:.0%} with {source.source_type} source"
+                    rationale=f"Semantic match ({method}): {relevance:.0%} with {source.source_type} source"
                 ))
 
                 # Boost confidence based on relevance and source reliability
@@ -251,13 +278,13 @@ class EvidenceJudge:
         for source_id in claim.contradict_evidence_ids:
             source = self.kb.get_source(source_id)
             if source:
-                relevance = self._calculate_relevance(claim_terms, source.snippet)
+                relevance, method = await self._calculate_relevance(claim.text, source.snippet)
                 evidence_links.append(ClaimEvidenceLink(
                     claim_id=claim.id,
                     source_id=source_id,
                     relation=EvidenceRelation.CONTRADICTS,
                     confidence=source.reliability * relevance,
-                    rationale=f"Contradicting evidence from {source.source_type}"
+                    rationale=f"Contradicting evidence ({method}) from {source.source_type}"
                 ))
                 # Penalty scales with relevance
                 penalty = self.CONTRADICTION_PENALTY * relevance
@@ -295,13 +322,42 @@ class EvidenceJudge:
         words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_-]*\b', text.lower())
         return {w for w in words if w not in _STOP_WORDS and len(w) > 2}
 
-    def _calculate_relevance(self, claim_terms: set, snippet: str) -> float:
-        """Calculate relevance score between claim terms and evidence snippet."""
-        if not claim_terms or not snippet:
-            return 0.0
+    async def _calculate_relevance(self, claim_text: str, snippet: str) -> Tuple[float, str]:
+        """
+        Calculate semantic relevance between claim and evidence snippet.
 
+        Uses semantic embeddings when available, falls back to term overlap.
+
+        Args:
+            claim_text: The claim text
+            snippet: The evidence snippet
+
+        Returns:
+            Tuple of (relevance_score, method_used)
+        """
+        if not claim_text or not snippet:
+            return 0.0, 'empty'
+
+        # Try semantic matching first
+        if self._use_semantic and self._semantic_matcher is not None:
+            try:
+                result = await self._semantic_matcher.compute_similarity(claim_text, snippet)
+                self._similarity_stats[result.method] = self._similarity_stats.get(result.method, 0) + 1
+                if result.cached:
+                    self._similarity_stats['cached'] += 1
+                return result.score, result.method
+            except Exception:
+                pass  # Fall through to term overlap
+
+        # Fallback to term overlap
+        return self._calculate_term_overlap(claim_text, snippet), 'term_overlap'
+
+    def _calculate_term_overlap(self, claim_text: str, snippet: str) -> float:
+        """Calculate term-overlap relevance (fallback method)."""
+        claim_terms = self._extract_terms(claim_text)
         snippet_terms = self._extract_terms(snippet)
-        if not snippet_terms:
+
+        if not claim_terms or not snippet_terms:
             return 0.0
 
         # Calculate Jaccard-like overlap
@@ -316,7 +372,21 @@ class EvidenceJudge:
         if coverage > 0.5:
             coverage = min(1.0, coverage * 1.2)
 
+        self._similarity_stats['term_overlap'] += 1
         return coverage
+
+    def get_similarity_stats(self) -> Dict[str, Any]:
+        """Get statistics about similarity methods used."""
+        total = sum(self._similarity_stats.values())
+        return {
+            'counts': self._similarity_stats.copy(),
+            'total': total,
+            'semantic_ratio': (
+                (self._similarity_stats.get('embedding', 0) + self._similarity_stats.get('llm', 0)) / total
+                if total > 0 else 0.0
+            ),
+            'cache_stats': self._semantic_matcher.get_cache_stats() if self._semantic_matcher else {}
+        }
 
     def _generate_notes(self, verdicts: List[ClaimVerdict]) -> List[str]:
         """Generate evaluation notes based on verdicts."""
