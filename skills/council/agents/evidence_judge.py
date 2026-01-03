@@ -276,18 +276,9 @@ class EvidenceJudge:
 
     def _extract_terms(self, text: str) -> set:
         """Extract significant terms from text for matching."""
-        import re
-
-        # Simple stop words
-        stop_words = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
-                      'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
-                      'could', 'should', 'may', 'might', 'must', 'to', 'of', 'in',
-                      'for', 'on', 'with', 'at', 'by', 'from', 'and', 'or', 'but',
-                      'not', 'this', 'that', 'it', 'its', 'they', 'them', 'we'}
-
         # Extract words, filter stop words and short terms
         words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_-]*\b', text.lower())
-        return {w for w in words if w not in stop_words and len(w) > 2}
+        return {w for w in words if w not in _STOP_WORDS and len(w) > 2}
 
     def _calculate_relevance(self, claim_terms: set, snippet: str) -> float:
         """Calculate relevance score between claim terms and evidence snippet."""
