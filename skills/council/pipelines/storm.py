@@ -97,10 +97,10 @@ class StormPipeline(Pipeline):
 
         Flow:
         1. Moderator detects workflow type from query
-        2. Run classic deliberation (temporary - will be replaced with workflow graphs)
+        2. Run classic deliberation (or workflow graph for STORM modes)
         3. Extract claims from results and populate KB
         4. Moderator analyzes round for shallow consensus
-        5. If shallow, trigger researcher (stub for now)
+        5. If shallow, trigger researcher for evidence retrieval
         6. Evidence Judge evaluates claims
         7. Calculate evidence-aware convergence
         8. Return result with KB snapshot
@@ -157,15 +157,28 @@ class StormPipeline(Pipeline):
             'shallow_consensus': moderator_decision.shallow_consensus_detected
         })
 
-        # Step 6: If shallow consensus or low coverage, note it (retrieval is stub)
+        # Step 6: If shallow consensus or low coverage, trigger real retrieval
         if moderator_decision.action == ModeratorAction.RETRIEVE:
+            claim_ids = moderator_decision.claims_needing_evidence
             emit({
                 'type': 'info',
-                'msg': f"Moderator detected need for evidence retrieval. "
-                       f"{len(moderator_decision.claims_needing_evidence)} claims need sources. "
-                       f"(Retrieval not yet implemented)"
+                'msg': f"Moderator triggered evidence retrieval for {len(claim_ids)} claims."
             })
-            # In future: await self._researcher.retrieve_for_claims(...)
+
+            if claim_ids:
+                # Perform real retrieval
+                retrieval_results = await self._researcher.retrieve_for_claims(
+                    claim_ids[:5],  # Limit to 5 claims
+                    max_sources_per_claim=2
+                )
+
+                sources_found = sum(len(r.sources_found) for r in retrieval_results if r.success)
+                emit({
+                    'type': 'retrieval_complete',
+                    'claims_researched': len(claim_ids),
+                    'sources_found': sources_found,
+                    'new_coverage': self._knowledge_base.evidence_coverage()
+                })
 
         # Step 7: Evidence Judge evaluates claims
         evidence_report = await self._evidence_judge.evaluate_all_claims()

@@ -261,17 +261,46 @@ class ResearchGraph(WorkflowGraph):
         """
         Node 3: Retrieve evidence for sub-questions.
 
-        Stub implementation - actual retrieval not yet implemented.
+        Uses the Researcher agent to find evidence from repo and docs.
         """
-        # Note: In full implementation, would use Researcher agent
+        import time
+        start = time.time()
+
+        # Import Researcher
+        from agents.researcher import Researcher
+
+        # Initialize researcher with the KB
+        researcher = Researcher(state.kb, allowed_sources=['repo', 'docs'])
+
+        # Get open question IDs from KB
+        question_ids = [q.id for q in state.kb.open_questions]
+
+        sources_found = []
+        if question_ids:
+            # Retrieve evidence for each question
+            results = await researcher.retrieve_for_questions(
+                question_ids[:5],  # Limit to first 5 questions
+                max_sources_per_question=2
+            )
+
+            for result in results:
+                if result.success:
+                    sources_found.extend(result.sources_found)
+
+        latency = int((time.time() - start) * 1000)
+
         return NodeResult(
             node_id="retrieve",
             status=NodeStatus.COMPLETED,
             output={
-                'note': 'Evidence retrieval not yet implemented',
-                'questions_to_research': len(self._questions),
-                'sources_found': 0
-            }
+                'questions_researched': len(question_ids),
+                'sources_found': len(sources_found),
+                'sources': [
+                    {'uri': s.uri, 'type': s.source_type, 'reliability': s.reliability}
+                    for s in sources_found[:10]  # Limit output size
+                ]
+            },
+            latency_ms=latency
         )
 
     async def _node_outline(self, state: WorkflowState) -> NodeResult:

@@ -428,32 +428,71 @@ class DecisionGraph(WorkflowGraph):
         """
         Node 4: Verify claims with evidence.
 
-        Checks KB for unsupported claims and notes them.
-        In full implementation, would trigger researcher.
+        Uses Researcher agent to find evidence for unsupported claims.
         """
-        unsupported = state.kb.get_unsupported_claims()
-        coverage = state.kb.evidence_coverage()
+        import time
+        start = time.time()
 
-        # Add open question if coverage is low
+        # Import Researcher
+        from agents.researcher import Researcher
+
+        unsupported = state.kb.get_unsupported_claims()
+        initial_coverage = state.kb.evidence_coverage()
+
+        sources_found = []
+        claims_researched = 0
+
+        # If we have unsupported claims, try to find evidence
+        if unsupported:
+            researcher = Researcher(state.kb, allowed_sources=['repo', 'docs'])
+
+            # Get claim IDs to research (limit to first 5)
+            claim_ids = [c.id for c in unsupported[:5]]
+            claims_researched = len(claim_ids)
+
+            # Retrieve evidence for unsupported claims
+            results = await researcher.retrieve_for_claims(
+                claim_ids,
+                max_sources_per_claim=2
+            )
+
+            for result in results:
+                if result.success:
+                    sources_found.extend(result.sources_found)
+
+        # Recalculate coverage after retrieval
+        final_coverage = state.kb.evidence_coverage()
+        still_unsupported = state.kb.get_unsupported_claims()
+
+        # Add open question if coverage is still low
         questions_added = []
-        if coverage < 0.5 and unsupported:
+        if final_coverage < 0.5 and still_unsupported:
             q = state.kb.add_question(
-                prompt=f"Evidence needed for {len(unsupported)} claims",
+                prompt=f"Additional evidence needed for {len(still_unsupported)} claims",
                 owner="evidence_check",
-                linked_claims=[c.id for c in unsupported[:5]],
+                linked_claims=[c.id for c in still_unsupported[:5]],
                 round_num=1
             )
             questions_added.append(q.id)
+
+        latency = int((time.time() - start) * 1000)
 
         return NodeResult(
             node_id="evidence_check",
             status=NodeStatus.COMPLETED,
             output={
-                'evidence_coverage': round(coverage, 3),
-                'unsupported_claims': len(unsupported),
-                'note': "Evidence retrieval not yet implemented" if unsupported else "All claims supported"
+                'initial_coverage': round(initial_coverage, 3),
+                'final_coverage': round(final_coverage, 3),
+                'claims_researched': claims_researched,
+                'sources_found': len(sources_found),
+                'still_unsupported': len(still_unsupported),
+                'sources': [
+                    {'uri': s.uri, 'type': s.source_type, 'reliability': s.reliability}
+                    for s in sources_found[:10]
+                ]
             },
-            questions_added=questions_added
+            questions_added=questions_added,
+            latency_ms=latency
         )
 
     async def _node_recommendation(self, state: WorkflowState) -> NodeResult:

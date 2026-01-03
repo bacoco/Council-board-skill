@@ -7,7 +7,8 @@ The Evidence Judge:
 3. Flags unsupported and contradicted claims
 4. Calculates evidence-based confidence adjustments
 
-Status: STUB - Core interface defined, LLM-based evaluation to be implemented.
+Implementation: Uses text-matching heuristics for claim-evidence relevance.
+Future: Can be enhanced with LLM-based semantic matching.
 """
 
 from dataclasses import dataclass, field
@@ -110,9 +111,11 @@ class EvidenceJudge:
     """
     Evaluates claims against evidence sources.
 
-    NOTE: This is a stub implementation. The actual evaluation logic
-    (LLM-based claim-evidence matching) needs to be implemented.
-    Currently uses simple heuristics.
+    Uses text-matching heuristics to determine if evidence supports claims:
+    - Extracts key terms from claims
+    - Checks for term presence in evidence snippets
+    - Scores relevance based on overlap
+    - Adjusts confidence based on evidence quality
     """
 
     # Confidence adjustment factors
@@ -197,41 +200,53 @@ class EvidenceJudge:
         """
         Evaluate a single claim against evidence.
 
-        TODO: Implement LLM-based evaluation:
-        - Send claim + source snippets to LLM
-        - Get support/contradict/partial judgment
-        - Extract confidence and rationale
-
-        Currently uses heuristic based on linked evidence.
+        Uses text-matching heuristics:
+        1. Extract key terms from claim
+        2. Check for term overlap with evidence snippets
+        3. Score relevance based on matches
+        4. Adjust confidence accordingly
         """
         evidence_links = []
         adjusted_confidence = claim.confidence
 
-        # Process supporting evidence
+        # Extract key terms from claim for matching
+        claim_terms = self._extract_terms(claim.text)
+
+        # Process supporting evidence with relevance scoring
         for source_id in claim.support_evidence_ids:
             source = self.kb.get_source(source_id)
             if source:
+                # Calculate relevance based on term overlap
+                relevance = self._calculate_relevance(claim_terms, source.snippet)
+                relation = EvidenceRelation.SUPPORTS if relevance > 0.3 else EvidenceRelation.PARTIAL
+
                 evidence_links.append(ClaimEvidenceLink(
                     claim_id=claim.id,
                     source_id=source_id,
-                    relation=EvidenceRelation.SUPPORTS,
-                    confidence=source.reliability,
-                    rationale="Linked as supporting evidence"
+                    relation=relation,
+                    confidence=source.reliability * relevance,
+                    rationale=f"Term overlap: {relevance:.0%} with {source.source_type} source"
                 ))
-                adjusted_confidence = min(1.0, adjusted_confidence + self.SUPPORT_BOOST)
+
+                # Boost confidence based on relevance and source reliability
+                boost = self.SUPPORT_BOOST * relevance * source.reliability
+                adjusted_confidence = min(1.0, adjusted_confidence + boost)
 
         # Process contradicting evidence
         for source_id in claim.contradict_evidence_ids:
             source = self.kb.get_source(source_id)
             if source:
+                relevance = self._calculate_relevance(claim_terms, source.snippet)
                 evidence_links.append(ClaimEvidenceLink(
                     claim_id=claim.id,
                     source_id=source_id,
                     relation=EvidenceRelation.CONTRADICTS,
-                    confidence=source.reliability,
-                    rationale="Linked as contradicting evidence"
+                    confidence=source.reliability * relevance,
+                    rationale=f"Contradicting evidence from {source.source_type}"
                 ))
-                adjusted_confidence = max(0.0, adjusted_confidence - self.CONTRADICTION_PENALTY)
+                # Penalty scales with relevance
+                penalty = self.CONTRADICTION_PENALTY * relevance
+                adjusted_confidence = max(0.0, adjusted_confidence - penalty)
 
         # Penalty for no evidence
         if not evidence_links:
@@ -242,8 +257,9 @@ class EvidenceJudge:
             status = ClaimStatus.CONTRADICTED
             summary = f"Claim contradicted by {len(claim.contradict_evidence_ids)} source(s)"
         elif claim.support_evidence_ids:
+            avg_relevance = sum(l.confidence for l in evidence_links) / len(evidence_links)
             status = ClaimStatus.SUPPORTED
-            summary = f"Claim supported by {len(claim.support_evidence_ids)} source(s)"
+            summary = f"Claim supported by {len(claim.support_evidence_ids)} source(s), avg relevance {avg_relevance:.0%}"
         else:
             status = claim.status  # Keep original (likely PROPOSED)
             summary = "No evidence linked to this claim"
@@ -257,6 +273,44 @@ class EvidenceJudge:
             evidence_links=evidence_links,
             summary=summary
         )
+
+    def _extract_terms(self, text: str) -> set:
+        """Extract significant terms from text for matching."""
+        import re
+
+        # Simple stop words
+        stop_words = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
+                      'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+                      'could', 'should', 'may', 'might', 'must', 'to', 'of', 'in',
+                      'for', 'on', 'with', 'at', 'by', 'from', 'and', 'or', 'but',
+                      'not', 'this', 'that', 'it', 'its', 'they', 'them', 'we'}
+
+        # Extract words, filter stop words and short terms
+        words = re.findall(r'\b[a-zA-Z][a-zA-Z0-9_-]*\b', text.lower())
+        return {w for w in words if w not in stop_words and len(w) > 2}
+
+    def _calculate_relevance(self, claim_terms: set, snippet: str) -> float:
+        """Calculate relevance score between claim terms and evidence snippet."""
+        if not claim_terms or not snippet:
+            return 0.0
+
+        snippet_terms = self._extract_terms(snippet)
+        if not snippet_terms:
+            return 0.0
+
+        # Calculate Jaccard-like overlap
+        overlap = claim_terms & snippet_terms
+        if not overlap:
+            return 0.0
+
+        # Score: overlap / claim terms (how much of claim is covered)
+        coverage = len(overlap) / len(claim_terms)
+
+        # Bonus for high overlap
+        if coverage > 0.5:
+            coverage = min(1.0, coverage * 1.2)
+
+        return coverage
 
     def _generate_notes(self, verdicts: List[ClaimVerdict]) -> List[str]:
         """Generate evaluation notes based on verdicts."""
