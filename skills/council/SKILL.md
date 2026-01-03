@@ -33,6 +33,7 @@ python3 ${SKILL_ROOT}/scripts/council.py \
 
 ## Modes
 
+### Classic Modes
 | Mode | Use When | Process |
 |------|----------|---------|
 | `consensus` | Factual questions, design decisions | Multi-round with convergence detection |
@@ -40,6 +41,15 @@ python3 ${SKILL_ROOT}/scripts/council.py \
 | `devil_advocate` | Stress-testing, security reviews | Red/Blue/Purple team analysis |
 | `vote` | Multiple choice decisions | Weighted vote tally |
 | `adaptive` | Uncertain complexity | Auto-escalates based on convergence |
+
+### STORM Modes (Evidence-Grounded)
+| Mode | Use When | Workflow |
+|------|----------|----------|
+| `storm_decision` | Architecture choices, technology selection | Options → Rubric → Red-team → Evidence → Recommendation |
+| `storm_research` | Deep dives, technical analysis | Perspectives → Questions → Retrieve → Draft → Critique |
+| `storm_review` | Code review, security audit | Static scan → Threat model → Quality → Patches → Checklist |
+
+STORM modes use KnowledgeBase tracking, semantic evidence matching, and Moderator-driven routing.
 
 **Mode details**: See [references/modes.md](references/modes.md)
 
@@ -127,6 +137,28 @@ Lines starting with `### filename.ext` are loaded automatically.
 - [references/failure-modes.md](references/failure-modes.md) - Error handling and recovery
 - [references/output-format.md](references/output-format.md) - Response templates
 - [references/examples.md](references/examples.md) - Usage examples
+
+## Features (v1.2.0)
+
+### Semantic Evidence Matching
+Evidence-claim relevance uses embedding similarity (sentence-transformers) instead of term overlap:
+- Local embeddings via `all-MiniLM-L6-v2` model
+- Falls back to term overlap if unavailable
+- Catches semantically equivalent text without lexical match
+
+### STORM Pipeline
+Evidence-grounded deliberation inspired by Stanford's STORM:
+- **KnowledgeBase**: Tracks claims, sources, decisions
+- **Moderator**: Detects workflow type, triggers retrieval on shallow consensus
+- **Researcher**: Retrieves evidence for claims
+- **EvidenceJudge**: Scores claims against sources with semantic matching
+- **Convergence**: Evidence-aware (agreement + coverage + objections)
+
+### Resilience
+- Circuit breaker per model (3 failures → OPEN)
+- Chairman failover chain: claude → gemini → codex
+- Adaptive timeout based on response history
+- Graceful degradation (min quorum: 2 models)
 
 ## Architecture Note
 
