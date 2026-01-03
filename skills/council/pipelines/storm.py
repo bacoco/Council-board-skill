@@ -13,6 +13,7 @@ Modes supported: storm_decision, storm_research, storm_review
 (Also supports classic modes with STORM enhancements)
 """
 
+import time
 from typing import Any, Dict, List, Optional
 
 import sys
@@ -23,6 +24,7 @@ from .base import Pipeline, PipelineResult
 from .classic import ClassicPipeline
 from core.models import SessionConfig
 from core.emit import emit
+from core.storm_trail import generate_storm_trail_markdown, save_storm_trail_to_file
 
 # STORM components
 from knowledge_base import KnowledgeBase
@@ -77,6 +79,9 @@ class StormPipeline(Pipeline):
         )
         # Track moderator decisions for trail
         self._routing_history: List[Dict[str, Any]] = []
+        # Track timing for trail file
+        self._start_time: float = 0
+        self._session_id = config.session_id if hasattr(config, 'session_id') else f"storm_{int(time.time())}"
 
     @classmethod
     def supports_mode(cls, mode: str) -> bool:
@@ -301,6 +306,8 @@ class StormPipeline(Pipeline):
         Returns:
             PipelineResult from workflow execution
         """
+        self._start_time = time.time()
+
         # Create workflow state
         state = WorkflowState(
             query=self.config.query,
@@ -367,13 +374,48 @@ class StormPipeline(Pipeline):
             if self._knowledge_base.get_claim(cid)
         ]
 
+        # Calculate duration
+        duration_ms = int((time.time() - self._start_time) * 1000)
+
+        # Generate trail file if enabled
+        trail_file = None
+        if getattr(self.config, 'enable_trail', True):
+            trail_markdown = generate_storm_trail_markdown(
+                session_id=self._session_id,
+                query=self.config.query,
+                mode=mode,
+                workflow_name=workflow_graph.name,
+                node_results=state.node_results,
+                kb_snapshot=self._knowledge_base.to_dict(),
+                moderator_history=self._routing_history,
+                convergence=convergence.to_dict(),
+                evidence_report=evidence_report.to_dict(),
+                final_answer=answer,
+                confidence=workflow_output.get('confidence', convergence.score),
+                duration_ms=duration_ms,
+                models=self.config.models,
+                context_preview=self.config.context[:500] if self.config.context else ""
+            )
+            trail_path = save_storm_trail_to_file(
+                markdown_content=trail_markdown,
+                session_id=self._session_id,
+                query=self.config.query,
+                mode=mode,
+                output_dir=getattr(self.config, 'output_dir', '.')
+            )
+            trail_file = str(trail_path)
+            emit({
+                'type': 'trail_saved',
+                'path': trail_file
+            })
+
         return PipelineResult(
             answer=answer,
             confidence=workflow_output.get('confidence', convergence.score),
             pipeline='storm',
             mode_used=original_mode,
             rounds=len(workflow_graph.nodes),
-            trail_file=None,  # Workflow doesn't produce trail file yet
+            trail_file=trail_file,
             knowledge_base=self._knowledge_base.to_dict(),
             evidence_coverage=self._knowledge_base.evidence_coverage(),
             unresolved_objections=unresolved if unresolved else None,
@@ -383,7 +425,8 @@ class StormPipeline(Pipeline):
                     'workflow': workflow_graph.name,
                     'nodes_executed': list(state.node_results.keys()),
                     'convergence': convergence.to_dict(),
-                    'evidence_report': evidence_report.to_dict()
+                    'evidence_report': evidence_report.to_dict(),
+                    'duration_ms': duration_ms
                 }
             }
         )
