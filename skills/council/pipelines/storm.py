@@ -425,7 +425,7 @@ class StormPipeline(Pipeline):
                 session_id=self._session_id,
                 query=self.config.query,
                 mode=mode,
-                output_dir=getattr(self.config, 'output_dir', '.')
+                output_dir=getattr(self.config, 'output_dir', 'council_trails')
             )
             trail_file = str(trail_path)
             emit({
