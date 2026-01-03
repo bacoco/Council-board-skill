@@ -21,7 +21,7 @@ Council orchestrates Claude, Gemini, and Codex to debate, challenge, and synthes
 **For Decision Makers:**
 - Consensus detected = instant green light
 - Full audit trail: every decision justified and shareable
-- 2-hour debates become 10-minute decisions
+- Complex debates become structured, documented decisions
 
 *Debate mode stress-tests. Consensus mode synthesizes.*
 *Personas adapt dynamically to your specific query—no scripting, no setup.*
@@ -29,7 +29,7 @@ Council orchestrates Claude, Gemini, and Codex to debate, challenge, and synthes
 **Doubt drags. Collective clarity ships.**
 
 ```bash
-/council "Microservices or monolith?"  # → Clear verdict in ~2 min
+/council "Should we raise funding or stay bootstrapped?"
 ```
 
 ---
@@ -48,21 +48,22 @@ This project extends Karpathy's [LLM Council](https://github.com/karpathy/llm-co
 ## See It In Action
 
 ```
-Council Deliberation: Microservices vs Monolith for Startups
+Council Deliberation: Should we raise funding or stay bootstrapped?
 
-Personas: The Velocity Optimizer, The Complexity Cartographer, The Scale Prophet
+Personas: The Growth Strategist, The Financial Realist, The Founder's Advocate
 Rounds: 2 (converged)
-Confidence: 0.89
+Confidence: 0.87
 
 Consensus:
-For early-stage startups (<15 engineers), start with a modular monolith.
-Extract services only when you have evidence of scaling bottlenecks.
+Stay bootstrapped if you can reach profitability within 12 months.
+Raise only if your market has clear winner-take-all dynamics
+or requires heavy upfront investment (hardware, regulatory, etc.).
 
 Dissenting View:
-The Scale Prophet notes that certain compliance requirements
-(HIPAA, PCI) may justify early service boundaries.
+The Growth Strategist notes that even profitable bootstrapped
+companies may want strategic investors for network effects and
+credibility in enterprise sales.
 ```
-*~2 minutes for complex questions*
 
 ## Quick Start
 
@@ -84,45 +85,167 @@ Then just ask:
 
 ## Features
 
-### 🎯 Deliberation Modes
+### 🎯 Deliberation Modes — When to Use What
 
-Choose how the AI models work together:
+**Not sure which mode to pick?** Here's a simple guide:
 
-| Mode | Best For | What Happens | Example |
-|------|----------|--------------|---------|
-| **Consensus** ⭐ | Technical questions, decisions | Models discuss until they agree | *"Ask the council: should we use PostgreSQL?"* |
-| **Debate** | Controversial topics | One argues FOR, one AGAINST | *"Debate this: React vs Vue"* |
-| **Devil's Advocate** | Testing ideas, security reviews | One model actively challenges | *"Challenge my design for login"* |
-| **Vote** | Multiple choice decisions | Each model votes with justification | *"Vote on: AWS vs Azure vs GCP"* |
+---
 
-⭐ **Default mode**: If you just say *"Ask the council: [question]"*, it uses **Consensus** mode automatically.
+#### 🤝 **Consensus** (Default)
+> *"I need a solid answer that experts would agree on."*
 
-### 🌩️ STORM Modes (New!)
+**How it works:** All three AIs discuss, see each other's arguments, and work toward agreement. Like a team meeting where everyone shares their view, responds to others, and reaches a shared conclusion.
 
-Evidence-grounded workflow graphs inspired by [STORM/Co-STORM research](https://arxiv.org/abs/2402.14207):
+**Use it when:**
+- You want the "right" answer, not just opinions
+- Multiple perspectives should be synthesized into one recommendation
+- You need confidence before acting
 
-| Mode | Best For | What Happens |
-|------|----------|--------------|
-| **storm_decision** | Architecture decisions, tech choices | Options → Rubric scoring → Red-team → Recommendation with tripwires |
-| **storm_research** | Deep dives, explanations | Perspectives → Questions → Draft → Critique → Final report |
-| **storm_review** | Code reviews, security audits | Static scan → Threat model → Quality analysis → Patch suggestions |
-
-```bash
-# Decision with structured workflow
-python3 skills/council/scripts/council.py --mode storm_decision --query "Microservices vs monolith?"
-
-# Research with multi-perspective analysis
-python3 skills/council/scripts/council.py --mode storm_research --query "Explain event sourcing"
-
-# Code review with threat modeling
-python3 skills/council/scripts/council.py --mode storm_review --query "Review this auth module" --context-file auth.py
+**Examples:**
+```
+"Should I hire a generalist or a specialist for my first employee?"
+"What's the best pricing strategy for a new SaaS product?"
+"How should a small team handle customer support at scale?"
 ```
 
-**Key STORM features:**
-- **KnowledgeBase** — Tracks claims, evidence, and decisions across the workflow
-- **Evidence-aware convergence** — Confidence factors in evidence coverage, not just agreement
-- **Moderator routing** — Detects shallow consensus and triggers deeper analysis
-- **Rich trail files** — KB snapshots, workflow node results, evidence reports
+**What you get:** A clear recommendation with reasoning, plus dissenting views if the AIs disagreed.
+
+---
+
+#### ⚔️ **Debate**
+> *"I want to hear the strongest case for both sides."*
+
+**How it works:** One AI argues FOR, another argues AGAINST, the third synthesizes. Like watching a structured debate where each side makes their best case.
+
+**Use it when:**
+- You're genuinely torn between two paths
+- You want to understand trade-offs before committing
+- There's no obvious "right answer"
+
+**Examples:**
+```
+"I'm torn between raising funding and staying bootstrapped"
+"Show me both sides: launch fast with bugs vs slow with polish"
+"What are the pros and cons of mandatory video calls for remote teams?"
+```
+
+**What you get:** Balanced arguments for both sides, with a summary of which points were strongest.
+
+---
+
+#### 😈 **Devil's Advocate**
+> *"Attack my idea. Find every flaw before someone else does."*
+
+**How it works:** Red Team tries to break your idea, Blue Team defends it, Purple Team synthesizes improvements. Like stress-testing a plan before you commit.
+
+**Use it when:**
+- You're about to make a big bet
+- You want to find blind spots in your thinking
+- You need to anticipate objections
+
+**Examples:**
+```
+"What could go wrong with our plan to launch in 3 markets at once?"
+"Tear apart our strategy to undercut competitors on price"
+"Find the blind spots in my plan to quit and freelance"
+```
+
+**What you get:** Weaknesses identified, counter-arguments surfaced, and concrete suggestions to strengthen your approach.
+
+---
+
+#### 🗳️ **Vote**
+> *"I have options. Help me pick."*
+
+**How it works:** Each AI votes for their preferred option and explains why. You see the tally and all reasoning.
+
+**Use it when:**
+- You have 3+ distinct choices
+- You want a quick decision with justification
+- The options are clear, you just need a push
+
+**Examples:**
+```
+"Help me choose: B2B, B2C, or both?"
+"Which is best for our rebrand — minimal, bold, or playful?"
+"Help me pick: expand to Europe, Asia, or Latin America first?"
+```
+
+**What you get:** Vote tally, winner recommendation, and each AI's reasoning.
+
+---
+
+**⭐ Default:** If you just say *"Ask the council: [question]"*, it uses **Consensus** mode automatically.
+
+### 🌩️ STORM Modes — Structured Deep Analysis
+
+Regular modes give you discussion. **STORM modes** give you structured workflows with evidence tracking — like having a research team follow a methodology.
+
+> Think of it like this: Regular modes are a conversation. STORM modes are a process.
+
+---
+
+#### 📊 **storm_decision** — Make a tough choice
+> *"I need to pick between options, but I want a rigorous process."*
+
+**What happens:**
+1. Lists all your options clearly
+2. Scores each option against criteria that matter
+3. Red-teams the leading choice (finds what could go wrong)
+4. Gives a final recommendation with warning signs to watch for
+
+**When to use:** Big decisions where you need to justify your choice to others (investors, team, yourself).
+
+**Example:**
+```
+"I need a rigorous comparison: build billing ourselves, use Stripe, or white-label?"
+"Help me formally evaluate: partner with A, partner with B, or go alone?"
+```
+
+---
+
+#### 🔬 **storm_research** — Understand something deeply
+> *"I need to really understand this topic, not just get a quick answer."*
+
+**What happens:**
+1. Generates different perspectives on the topic
+2. Creates questions each perspective would ask
+3. Drafts an explanation
+4. Critiques and improves the draft
+5. Produces a final comprehensive report
+
+**When to use:** Learning something new, preparing for a presentation, writing documentation.
+
+**Example:**
+```
+"I need to deeply understand how recommendation algorithms work"
+"Give me a comprehensive analysis of the carbon credit market"
+```
+
+---
+
+#### 🔍 **storm_review** — Audit something thoroughly
+> *"Review this and tell me what's wrong with it."*
+
+**What happens:**
+1. Scans for obvious issues
+2. Models potential threats/risks
+3. Analyzes quality from multiple angles
+4. Suggests specific fixes
+
+**When to use:** Before launching, before signing, before committing to something.
+
+**Example:**
+```
+"Thoroughly review this contract before I sign" (with --context-file)
+"Audit our onboarding flow and check for issues"
+```
+
+---
+
+**Why STORM over regular modes?**
+- Regular modes: Great for questions and decisions
+- STORM modes: Better for complex analysis that needs structure and evidence tracking
 
 ### 📋 Full Reasoning Trail
 
@@ -224,12 +347,16 @@ codex auth
 
 ## Example Phrases
 
-| What you say | What happens |
-|--------------|--------------|
-| "Ask the council: [question]" | 3 models collaborate to answer |
-| "Debate this: [topic]" | Models argue FOR and AGAINST |
-| "Challenge my design: [proposal]" | Red Team attacks, Blue Team defends |
-| "Peer review this code" | Security, architecture, performance review |
+Just talk naturally. Council detects your intent.
+
+| What you say | Mode triggered |
+|--------------|----------------|
+| "Ask the council: should we expand to Europe?" | **Consensus** — collaborative answer |
+| "I'm torn between hiring now or waiting" | **Debate** — FOR vs AGAINST |
+| "What could go wrong with our launch plan?" | **Devil's advocate** — stress-test |
+| "Help me choose between these 3 vendors" | **Vote** — tally with reasoning |
+| "I need to deeply understand how pricing works" | **STORM research** — structured deep-dive |
+| "Just ask Claude what it thinks" | **Direct** — single model, no debate |
 
 ## Why This Beats Single-Model Answers
 
@@ -244,14 +371,14 @@ codex auth
 Uses your existing `claude`, `gemini`, and `codex` CLI subscriptions. No separate API costs — just your regular CLI usage.
 
 <details>
-<summary>Dynamic Personas — Council Self-Analysis</summary>
+<summary>Dynamic Personas — How They Work</summary>
 
-Council **automatically generates personas tailored to your question**.
+Council **automatically generates expert personas tailored to your question**.
 
-Example personas generated for "How to secure a payment API?":
-- *The Cryptography Sentinel* — encryption and key management
-- *The Compliance Navigator* — PCI-DSS and regulatory requirements
-- *The Attack Surface Cartographer* — threat modeling and vulnerabilities
+Example personas generated for "Should we expand internationally?":
+- *The Market Scout* — market size, competition, timing
+- *The Operations Realist* — logistics, hiring, legal complexity
+- *The Financial Strategist* — costs, currency risk, break-even timeline
 
 ### We Asked the Council About Itself
 
@@ -287,68 +414,68 @@ Council keeps working even when models fail:
 
 ## Full Transcript Example
 
-Real deliberation on a coding question with actual timings:
+Real deliberation showing how the council works:
 
 <details>
-<summary>Question: "Python async scraper hitting rate limits — backoff, semaphore, or queue?"</summary>
+<summary>Question: "Should we open-source our core product?"</summary>
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
 ║              COUNCIL SETUP VALIDATION                        ║
 ╠══════════════════════════════════════════════════════════════╣
-║  ✓ claude   │ 2.0.76 (Claude Code)                          ║
-║  ✓ gemini   │ 0.16.0                                        ║
-║  ✓ codex    │ codex-cli 0.72.0                              ║
+║  ✓ claude   │ Claude Code                                   ║
+║  ✓ gemini   │ Gemini CLI                                    ║
+║  ✓ codex    │ Codex CLI                                     ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  STATUS: All CLIs ready ✓                                    ║
 ╚══════════════════════════════════════════════════════════════╝
 
 Session: council-1767103092
-Mode: consensus | Max rounds: 2
+Mode: debate | Max rounds: 2
 
 ROUND 1 - Initial Positions
-├─ Personas: The Backpressure Alchemist, Guardian of the Semaphore Gates, The Queue Architect
-├─ Claude (28.6s) ✓
-├─ Gemini (38.1s) ✓
-└─ Codex (10.0s) ✓
+├─ Personas: The Community Builder, The Revenue Guardian, The Market Analyst
+├─ Claude ✓
+├─ Gemini ✓
+└─ Codex ✓
 
 ROUND 2 - Rebuttals
-├─ Personas: The Throttle Alchemist, Oracle of the Semaphore Gates, The Queue Architect
-├─ Claude (31.8s) ✓
-├─ Gemini (38.0s) ✓
-└─ Codex (11.1s) ✓
-└─ Convergence: 0.926 ✓
+├─ Claude ✓
+├─ Gemini ✓
+└─ Codex ✓
+└─ Convergence: 0.82 ✓
 
 PEER REVIEW
-├─ The Throttle Alchemist: 16/20
-├─ Oracle of the Semaphore Gates: 18/20
-└─ The Queue Architect: 20/20
+├─ The Community Builder: 17/20
+├─ The Revenue Guardian: 18/20
+└─ The Market Analyst: 16/20
 
-SYNTHESIS (31.8s)
-├─ Confidence: 0.91
-└─ Contradictions resolved: 3
-
-TOTAL: 168.6s (~2.8 min)
+SYNTHESIS
+├─ Confidence: 0.85
+└─ Contradictions resolved: 2
 
 ═══════════════════════════════════════════════════════════════
 
-VERDICT: Use all three in a layered architecture.
+VERDICT: Open-source strategically, not completely.
 
-Your question presents a false trichotomy — at 10,000 URLs/hour
-(~2.8 req/sec), you need a hybrid approach:
+The council recommends an "open core" model:
 
-1. Queue-Based Foundation (asyncio.Queue)
-2. Per-Host Semaphores (NOT global!)
-3. Token Bucket Rate Limiting (~2.5 req/sec)
-4. Exponential Backoff with Jitter
-5. Adaptive Tuning
+FOR open-sourcing (Community Builder):
+- Builds trust and adoption faster than marketing
+- Community contributions improve the product
+- Reduces customer acquisition cost
 
-Implementation Priority:
-Queue → Per-host Semaphores → Token Bucket → Backoff → Adaptive
+AGAINST full open-source (Revenue Guardian):
+- Pure open-source has no direct monetization
+- Competitors can fork without contributing back
+- Support burden shifts to you without revenue
 
-DISSENT: Participant A argued semaphores should be primary,
-queue adds unnecessary complexity. Overruled: at 10k URLs/hour,
-queues provide essential operational benefits.
+RECOMMENDATION:
+Open-source the core engine, keep enterprise features proprietary.
+Examples: GitLab, Elastic, HashiCorp model.
+
+DISSENT: The Community Builder argues full open-source
+builds deeper trust. Counter: trust doesn't pay salaries.
 ```
 
 </details>

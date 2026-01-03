@@ -1,6 +1,15 @@
 ---
 name: council
-description: Orchestrates multi-model deliberation from Claude, Gemini, and Codex. Use when user asks to "ask the council", "debate this", "vote on", "get multiple opinions", "peer review", "challenge my design", or requests collective AI intelligence. Also use for direct model queries like "ask Claude directly", "use Gemini", "ask Codex", "ask only Claude", "query Gemini", or comparing specific models.
+description: |
+  Orchestrates multi-model deliberation from Claude, Gemini, and Codex.
+
+  INVOKE THIS SKILL when user wants:
+  - Multiple AI perspectives: "ask the council", "get opinions", "what do the models think"
+  - Debate/both sides: "both sides of", "pros and cons", "I'm torn between", "arguments for and against"
+  - Stress-testing: "poke holes", "what could go wrong", "find flaws", "what am I missing", "blind spots"
+  - Choosing between options: "help me choose", "which should I pick", "A vs B vs C"
+  - Deep understanding: "deeply understand", "thorough research", "comprehensive analysis"
+  - Direct model query: "ask Claude directly", "just Gemini", "Codex only", "skip the council"
 allowed-tools:
   - "Bash(python3 ${SKILL_ROOT}/scripts/council.py:*)"
   - "Read(**/*.py)"
@@ -31,7 +40,46 @@ python3 ${SKILL_ROOT}/scripts/council.py \
   --mode devil_advocate
 ```
 
-## Modes
+## Mode Detection from Natural Language
+
+**IMPORTANT**: Detect the user's intent and use the correct `--mode` flag.
+
+### Detect DEBATE mode when user says:
+- "both sides", "pros and cons", "arguments for and against"
+- "I'm torn between", "help me see both perspectives"
+- "what's the case for/against"
+- Binary choices with genuine controversy (no clear right answer)
+
+→ Use `--mode debate`
+
+### Detect DEVIL_ADVOCATE mode when user says:
+- "poke holes", "tear apart", "what could go wrong"
+- "find flaws", "stress test", "attack my idea"
+- "what am I missing", "blind spots", "risks"
+- "challenge", "critique", "red team"
+
+→ Use `--mode devil_advocate`
+
+### Detect VOTE mode when user says:
+- "help me choose between", "which should I pick"
+- "A vs B vs C" (3+ options)
+- "rank these options", "which is best"
+
+→ Use `--mode vote`
+
+### Detect STORM modes when user says:
+- "deeply understand", "thorough research", "comprehensive analysis" → `--mode storm_research`
+- "rigorous decision", "structured evaluation", "compare options formally" → `--mode storm_decision`
+- "audit", "review thoroughly", "check for issues" → `--mode storm_review`
+
+### Default to CONSENSUS when:
+- User asks a question expecting a clear answer
+- "What should I do?", "Is this a good idea?", "How should I approach..."
+- No explicit signals for other modes
+
+→ Use `--mode consensus` (or omit, it's the default)
+
+## Modes Reference
 
 ### Classic Modes
 | Mode | Use When | Process |
