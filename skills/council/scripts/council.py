@@ -397,8 +397,25 @@ def main():
     if args.direct:
         if not args.query:
             parser.error("--query is required for --direct mode")
+
+        # SECURITY: Validate input before direct mode (fixes validation bypass)
+        validation = validate_and_sanitize(
+            query=args.query,
+            context=None,
+            max_rounds=1,
+            timeout=args.timeout,
+            strict=True
+        )
+        if not validation['is_valid']:
+            emit({
+                'type': 'error',
+                'msg': 'Input validation failed - request rejected',
+                'violations': validation['violations']
+            })
+            sys.exit(1)
+
         models = [m.strip() for m in args.models.split(',')]
-        asyncio.run(run_direct(models, args.query, args.timeout, args.human))
+        asyncio.run(run_direct(models, validation['query'], args.timeout, args.human))
         sys.exit(0)
 
     # Validate --query is provided when not in check mode
