@@ -169,9 +169,24 @@ JSON array only, start with [ and end with ]:"""
                     metrics.record_latency('persona_gen', elapsed_ms)
                 cache_bucket[cache_key] = personas
                 return personas
+        else:
+            # Chairman call failed (timeout, error, etc.) - use fallback
+            emit({
+                "type": "persona_generation_fallback",
+                "msg": f"Chairman call failed (success=False), using PersonaManager",
+                "error": result.error if hasattr(result, 'error') else "Unknown error"
+            })
+            cache_bucket.pop(cache_key, None)
+            personas = PERSONA_MANAGER.assign_personas(query, num_models)
+            if metrics:
+                elapsed_ms = int((time.time() - persona_start) * 1000)
+                metrics.record_persona_cache(False, elapsed_ms)
+                metrics.record_latency('persona_gen', elapsed_ms)
+            cache_bucket[cache_key] = personas
+            return personas
 
-    # Fallback if chairman unavailable
-    emit({"type": "persona_generation_fallback", "msg": "Chairman unavailable, using PersonaManager"})
+    # Fallback if chairman not in ADAPTERS (should not happen normally)
+    emit({"type": "persona_generation_fallback", "msg": f"Chairman '{actual_chairman}' not in ADAPTERS, using PersonaManager"})
     cache_bucket.pop(cache_key, None)
     personas = PERSONA_MANAGER.assign_personas(query, num_models)
     if metrics:
