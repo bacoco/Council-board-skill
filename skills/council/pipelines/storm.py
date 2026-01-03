@@ -31,6 +31,9 @@ from agents.researcher import Researcher
 from agents.evidence_judge import EvidenceJudge
 from convergence import ConvergenceDetector, ConvergenceResult
 
+# Workflow graphs
+from workflows import DecisionGraph, ResearchGraph, CodeReviewGraph, WorkflowState
+
 
 class StormPipeline(Pipeline):
     """
@@ -114,22 +117,15 @@ class StormPipeline(Pipeline):
             'query_preview': self.config.query[:100]
         })
 
-        # Step 2: Handle STORM-native modes (not yet fully implemented)
+        # Step 2: Handle STORM-native modes with workflow graphs
         if mode in self.STORM_MODES:
             emit({
                 'type': 'info',
-                'msg': f"STORM mode '{mode}' using enhanced consensus flow. "
-                       f"Full workflow graphs coming in Phase 2."
+                'msg': f"Running STORM workflow graph for mode '{mode}'"
             })
-            # Map to appropriate classic mode for now
-            mode_map = {
-                'storm_decision': 'consensus',
-                'storm_research': 'consensus',
-                'storm_review': 'devil_advocate'  # Red-team approach for reviews
-            }
-            self.config.mode = mode_map.get(mode, 'consensus')
+            return await self._run_workflow_mode(mode, original_mode, workflow)
 
-        # Step 3: Run classic deliberation to get base result
+        # Step 3: Run classic deliberation with STORM enhancements
         classic = ClassicPipeline(self.config)
         classic_result = await classic.run()
 
@@ -291,3 +287,173 @@ class StormPipeline(Pipeline):
             rationale += f"\n**Note:** {len(evidence_report.unsupported_claims)} claim(s) await evidence verification."
 
         return answer + rationale
+
+    async def _run_workflow_mode(self, mode: str, original_mode: str,
+                                  workflow_type: WorkflowType) -> PipelineResult:
+        """
+        Execute a STORM-native mode using workflow graphs.
+
+        Args:
+            mode: The STORM mode (storm_decision, storm_research, storm_review)
+            original_mode: Original mode before any mapping
+            workflow_type: Detected workflow type from Moderator
+
+        Returns:
+            PipelineResult from workflow execution
+        """
+        # Create workflow state
+        state = WorkflowState(
+            query=self.config.query,
+            context=self.config.context or "",
+            kb=self._knowledge_base,
+            models=self.config.models,
+            chairman=self.config.chairman,
+            timeout=self.config.timeout
+        )
+
+        # Select appropriate workflow graph
+        workflow_map = {
+            'storm_decision': DecisionGraph,
+            'storm_research': ResearchGraph,
+            'storm_review': CodeReviewGraph
+        }
+
+        WorkflowClass = workflow_map.get(mode, DecisionGraph)
+        workflow_graph = WorkflowClass(state)
+
+        emit({
+            'type': 'workflow_start',
+            'workflow': workflow_graph.name,
+            'nodes': [n.name for n in workflow_graph.nodes]
+        })
+
+        # Execute workflow
+        workflow_output = await workflow_graph.execute()
+
+        emit({
+            'type': 'workflow_complete',
+            'workflow': workflow_graph.name,
+            'success': workflow_output.get('success', False),
+            'progress': workflow_graph.get_progress()
+        })
+
+        # Evidence Judge evaluates claims from workflow
+        evidence_report = await self._evidence_judge.evaluate_all_claims()
+
+        # Calculate convergence
+        convergence = self._convergence.check_evidence_aware(
+            round_outputs=[{'confidence': workflow_output.get('confidence', 0.7)}],
+            kb=self._knowledge_base
+        )
+
+        # Build answer from workflow output
+        if mode == 'storm_decision':
+            recommendation = workflow_output.get('recommendation', {})
+            answer = self._format_decision_answer(recommendation, workflow_output)
+        elif mode == 'storm_research':
+            answer = workflow_output.get('report', 'Research report unavailable')
+        elif mode == 'storm_review':
+            answer = self._format_review_answer(workflow_output)
+        else:
+            answer = str(workflow_output)
+
+        # Enhance with evidence rationale
+        answer = self._enhance_answer_with_evidence(answer, convergence, evidence_report)
+
+        # Build unresolved objections
+        unresolved = [
+            self._knowledge_base.get_claim(cid).text
+            for cid in evidence_report.contradicted_claims
+            if self._knowledge_base.get_claim(cid)
+        ]
+
+        return PipelineResult(
+            answer=answer,
+            confidence=workflow_output.get('confidence', convergence.score),
+            pipeline='storm',
+            mode_used=original_mode,
+            rounds=len(workflow_graph.nodes),
+            trail_file=None,  # Workflow doesn't produce trail file yet
+            knowledge_base=self._knowledge_base.to_dict(),
+            evidence_coverage=self._knowledge_base.evidence_coverage(),
+            unresolved_objections=unresolved if unresolved else None,
+            raw_result={
+                'workflow_output': workflow_output,
+                'storm_metadata': {
+                    'workflow': workflow_graph.name,
+                    'nodes_executed': list(state.node_results.keys()),
+                    'convergence': convergence.to_dict(),
+                    'evidence_report': evidence_report.to_dict()
+                }
+            }
+        )
+
+    def _format_decision_answer(self, recommendation: Dict[str, Any],
+                                 workflow_output: Dict[str, Any]) -> str:
+        """Format decision workflow output as readable answer."""
+        parts = []
+
+        if recommendation:
+            parts.append(f"## Recommendation: {recommendation.get('recommended_option', 'N/A')}")
+            parts.append(f"\n**Score:** {recommendation.get('score', 0):.0%}")
+            parts.append(f"\n**Rationale:** {recommendation.get('rationale', 'N/A')}")
+
+            if recommendation.get('tradeoffs'):
+                parts.append("\n\n**Tradeoffs:**")
+                for t in recommendation['tradeoffs']:
+                    parts.append(f"\n- {t}")
+
+            if recommendation.get('tripwires'):
+                parts.append("\n\n**Revisit if:**")
+                for t in recommendation['tripwires']:
+                    parts.append(f"\n- {t}")
+
+        # Add options summary
+        options = workflow_output.get('options', [])
+        if options:
+            parts.append("\n\n**Options Evaluated:**")
+            for opt in options:
+                parts.append(f"\n- {opt.get('name', 'Unknown')}: {opt.get('score', 0):.0%}")
+
+        return ''.join(parts)
+
+    def _format_review_answer(self, workflow_output: Dict[str, Any]) -> str:
+        """Format code review workflow output as readable answer."""
+        parts = []
+
+        assessment = workflow_output.get('assessment', 'Unknown')
+        parts.append(f"## Code Review: {assessment}")
+
+        summary = workflow_output.get('summary', {})
+        if summary:
+            parts.append(f"\n\n**Summary:** {summary.get('threats', 0)} threats, "
+                        f"{summary.get('issues', 0)} issues, "
+                        f"{summary.get('patches', 0)} suggestions")
+
+        # Threats
+        threats = workflow_output.get('threats', [])
+        if threats:
+            parts.append("\n\n### Security Threats")
+            for t in threats:
+                parts.append(f"\n- **[{t.get('severity', 'medium').upper()}]** {t.get('name', 'Unknown')}")
+                parts.append(f"\n  Mitigation: {t.get('mitigation', 'N/A')}")
+
+        # Issues
+        issues = workflow_output.get('issues', [])
+        if issues:
+            parts.append("\n\n### Issues")
+            for i in issues:
+                parts.append(f"\n- **[{i.get('severity', 'medium').upper()}]** {i.get('title', 'Unknown')}")
+                if i.get('suggestion'):
+                    parts.append(f"\n  Suggestion: {i.get('suggestion')}")
+
+        # Checklist
+        checklist = workflow_output.get('checklist', [])
+        if checklist:
+            parts.append("\n\n### Checklist")
+            for category in checklist:
+                parts.append(f"\n**{category.get('category', 'General')}:**")
+                for item in category.get('items', []):
+                    parts.append(f"\n- [ ] {item.get('text', 'Item')}")
+
+        return ''.join(parts)
