@@ -124,9 +124,11 @@ class StormPipeline(Pipeline):
 
         # Step 2: Handle STORM-native modes with workflow graphs
         if mode in self.STORM_MODES:
+            # Use Moderator-detected workflow type for routing (not just mode string)
+            # This allows Moderator to override mode based on query analysis
             emit({
                 'type': 'info',
-                'msg': f"Running STORM workflow graph for mode '{mode}'"
+                'msg': f"Running STORM workflow graph (mode='{mode}', moderator_workflow='{workflow.value}')"
             })
             return await self._run_workflow_mode(mode, original_mode, workflow)
 
@@ -331,14 +333,23 @@ class StormPipeline(Pipeline):
             timeout=self.config.timeout
         )
 
-        # Select appropriate workflow graph
-        workflow_map = {
+        # Select workflow graph based on Moderator's workflow_type detection
+        # This enables Moderator-driven routing instead of just mode string matching
+        workflow_type_map = {
+            WorkflowType.DECISION: DecisionGraph,
+            WorkflowType.RESEARCH: ResearchGraph,
+            WorkflowType.CODE_REVIEW: CodeReviewGraph
+        }
+
+        # Fallback map for explicit mode override
+        mode_fallback_map = {
             'storm_decision': DecisionGraph,
             'storm_research': ResearchGraph,
             'storm_review': CodeReviewGraph
         }
 
-        WorkflowClass = workflow_map.get(mode, DecisionGraph)
+        # Prefer Moderator's detected workflow, fallback to mode string
+        WorkflowClass = workflow_type_map.get(workflow_type, mode_fallback_map.get(mode, DecisionGraph))
         workflow_graph = WorkflowClass(state)
 
         emit({

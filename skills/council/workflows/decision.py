@@ -128,7 +128,7 @@ class DecisionGraph(WorkflowGraph):
             name="Evidence Check",
             description="Verify claims against available evidence",
             dependencies=["red_team"],
-            optional=True,  # Can proceed without evidence
+            optional=False,  # Required for evidence-grounded decisions
             execute_fn=self._node_evidence_check
         ))
 

@@ -93,7 +93,7 @@ class ResearchGraph(WorkflowGraph):
             name="Retrieve Evidence",
             description="Gather evidence for each sub-question",
             dependencies=["question_plan"],
-            optional=True,  # Can proceed with limited evidence
+            optional=False,  # Required for evidence-grounded research
             execute_fn=self._node_retrieve
         ))
 
@@ -115,22 +115,31 @@ class ResearchGraph(WorkflowGraph):
             execute_fn=self._node_draft
         ))
 
-        # Node 6: Critique
+        # Node 6: Verify Claims (evidence retrieval for claims)
+        self.add_node(WorkflowNode(
+            id="verify_claims",
+            name="Verify Claims",
+            description="Retrieve evidence for claims made in draft",
+            dependencies=["draft"],
+            execute_fn=self._node_verify_claims
+        ))
+
+        # Node 7: Critique
         self.add_node(WorkflowNode(
             id="critique",
             name="Self-Critique",
             description="Identify gaps and weaknesses",
-            dependencies=["draft"],
+            dependencies=["draft", "verify_claims"],
             optional=True,
             execute_fn=self._node_critique
         ))
 
-        # Node 7: Final Report
+        # Node 8: Final Report
         self.add_node(WorkflowNode(
             id="final_report",
             name="Final Report",
             description="Synthesize final research report",
-            dependencies=["draft"],
+            dependencies=["draft", "verify_claims"],
             execute_fn=self._node_final_report
         ))
 
@@ -388,9 +397,65 @@ class ResearchGraph(WorkflowGraph):
             latency_ms=latency
         )
 
+    async def _node_verify_claims(self, state: WorkflowState) -> NodeResult:
+        """
+        Node 6: Verify claims with evidence retrieval.
+
+        Uses Researcher to find evidence for claims added during draft.
+        This ensures claims are linked to sources for evidence coverage.
+        """
+        import time
+        start = time.time()
+
+        # Import Researcher
+        from agents.researcher import Researcher
+
+        # Get unsupported claims from KB
+        unsupported_claims = state.kb.get_unsupported_claims()
+        initial_coverage = state.kb.evidence_coverage()
+
+        sources_found = []
+        claims_researched = 0
+
+        if unsupported_claims:
+            researcher = Researcher(state.kb, allowed_sources=['repo', 'docs'])
+
+            # Get claim IDs to research (limit to first 5)
+            claim_ids = [c.id for c in unsupported_claims[:5]]
+            claims_researched = len(claim_ids)
+
+            # Retrieve evidence for claims (is_claim=True ensures linking)
+            results = await researcher.retrieve_for_claims(
+                claim_ids,
+                max_sources_per_claim=2
+            )
+
+            for result in results:
+                if result.success:
+                    sources_found.extend(result.sources_found)
+
+        final_coverage = state.kb.evidence_coverage()
+        latency = int((time.time() - start) * 1000)
+
+        return NodeResult(
+            node_id="verify_claims",
+            status=NodeStatus.COMPLETED,
+            output={
+                'initial_coverage': round(initial_coverage, 3),
+                'final_coverage': round(final_coverage, 3),
+                'claims_researched': claims_researched,
+                'sources_found': len(sources_found),
+                'sources': [
+                    {'uri': s.uri, 'type': s.source_type, 'reliability': s.reliability}
+                    for s in sources_found[:10]
+                ]
+            },
+            latency_ms=latency
+        )
+
     async def _node_critique(self, state: WorkflowState) -> NodeResult:
         """
-        Node 6: Self-critique the draft.
+        Node 7: Self-critique the draft.
 
         Queries models to identify gaps and weaknesses.
         """

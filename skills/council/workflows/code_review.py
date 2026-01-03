@@ -100,25 +100,34 @@ class CodeReviewGraph(WorkflowGraph):
             execute_fn=self._node_static_scan
         ))
 
-        # Node 2: Threat Model
+        # Node 2: Evidence Retrieval
+        self.add_node(WorkflowNode(
+            id="evidence_retrieval",
+            name="Evidence Retrieval",
+            description="Retrieve evidence for claims from static scan",
+            dependencies=["static_scan"],
+            execute_fn=self._node_evidence_retrieval
+        ))
+
+        # Node 3: Threat Model
         self.add_node(WorkflowNode(
             id="threat_model",
             name="Threat Modeling",
             description="Security threat analysis",
-            dependencies=["static_scan"],
+            dependencies=["static_scan", "evidence_retrieval"],
             execute_fn=self._node_threat_model
         ))
 
-        # Node 3: Performance/Maintainability
+        # Node 4: Performance/Maintainability
         self.add_node(WorkflowNode(
             id="quality_analysis",
             name="Quality Analysis",
             description="Performance and maintainability review",
-            dependencies=["static_scan"],
+            dependencies=["static_scan", "evidence_retrieval"],
             execute_fn=self._node_quality_analysis
         ))
 
-        # Node 4: Patch Suggestions
+        # Node 5: Patch Suggestions
         self.add_node(WorkflowNode(
             id="patches",
             name="Patch Suggestions",
@@ -127,7 +136,7 @@ class CodeReviewGraph(WorkflowGraph):
             execute_fn=self._node_patches
         ))
 
-        # Node 5: Final Checklist
+        # Node 6: Final Checklist
         self.add_node(WorkflowNode(
             id="checklist",
             name="Review Checklist",
@@ -229,9 +238,65 @@ class CodeReviewGraph(WorkflowGraph):
             latency_ms=latency
         )
 
+    async def _node_evidence_retrieval(self, state: WorkflowState) -> NodeResult:
+        """
+        Node 2: Evidence retrieval for claims.
+
+        Uses Researcher to find evidence for claims added during static scan.
+        This ensures security claims are backed by evidence.
+        """
+        import time
+        start = time.time()
+
+        # Import Researcher
+        from agents.researcher import Researcher
+
+        # Get unsupported claims from KB
+        unsupported_claims = state.kb.get_unsupported_claims()
+        initial_coverage = state.kb.evidence_coverage()
+
+        sources_found = []
+        claims_researched = 0
+
+        if unsupported_claims:
+            researcher = Researcher(state.kb, allowed_sources=['repo', 'docs'])
+
+            # Get claim IDs to research (limit to first 5)
+            claim_ids = [c.id for c in unsupported_claims[:5]]
+            claims_researched = len(claim_ids)
+
+            # Retrieve evidence for claims
+            results = await researcher.retrieve_for_claims(
+                claim_ids,
+                max_sources_per_claim=2
+            )
+
+            for result in results:
+                if result.success:
+                    sources_found.extend(result.sources_found)
+
+        final_coverage = state.kb.evidence_coverage()
+        latency = int((time.time() - start) * 1000)
+
+        return NodeResult(
+            node_id="evidence_retrieval",
+            status=NodeStatus.COMPLETED,
+            output={
+                'initial_coverage': round(initial_coverage, 3),
+                'final_coverage': round(final_coverage, 3),
+                'claims_researched': claims_researched,
+                'sources_found': len(sources_found),
+                'sources': [
+                    {'uri': s.uri, 'type': s.source_type, 'reliability': s.reliability}
+                    for s in sources_found[:10]
+                ]
+            },
+            latency_ms=latency
+        )
+
     async def _node_threat_model(self, state: WorkflowState) -> NodeResult:
         """
-        Node 2: Security threat modeling.
+        Node 3: Security threat modeling.
 
         Queries models for security threat analysis.
         """
