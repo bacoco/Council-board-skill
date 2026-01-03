@@ -22,10 +22,13 @@ from core.models import SessionConfig
 from core.emit import emit, set_output_mode
 from core.adapters import expand_models_with_fallback, ADAPTERS, check_cli_available
 
-# Import mode implementations
+# Import mode implementations (used by classic pipeline, kept for direct access)
 from modes.consensus import run_council
 from modes.vote import run_vote_council
 from modes.adaptive import run_adaptive_cascade
+
+# Import pipeline implementations
+from pipelines import get_pipeline, PIPELINES
 
 
 # ============================================================================
@@ -334,7 +337,12 @@ def main():
     parser.add_argument('--context', '-c', help='Code or additional context for analysis (optional)')
     parser.add_argument('--context-file', '-f', help='Path to file containing context (code, docs, etc.)')
     parser.add_argument('--mode', '-m', default='adaptive',
-                       choices=['adaptive', 'consensus', 'debate', 'vote', 'devil_advocate'])
+                       choices=['adaptive', 'consensus', 'debate', 'vote', 'devil_advocate',
+                                'storm_decision', 'storm_research', 'storm_review'])
+    parser.add_argument('--pipeline', '-p', default=None,
+                       choices=['classic', 'storm'],
+                       help='Pipeline to use: classic (original) or storm (STORM-inspired). '
+                            'Auto-detected from mode if not specified. Default from config.')
     parser.add_argument('--models', default='claude,gemini,codex', help='Comma-separated model list')
     parser.add_argument('--chairman', default='claude', help='Synthesizer model')
     parser.add_argument('--timeout', type=int, default=config_defaults.timeout, help='Per-model timeout (seconds)')
@@ -457,13 +465,43 @@ def main():
         context=validation['context']  # REDACTED CONTEXT
     )
 
-    # Mode dispatch
-    if args.mode == 'adaptive':
-        result = asyncio.run(run_adaptive_cascade(config))
-    elif args.mode == 'vote':
-        result = asyncio.run(run_vote_council(config))
+    # Pipeline selection logic:
+    # 1. Explicit --pipeline flag takes priority
+    # 2. STORM modes (storm_*) auto-select storm pipeline
+    # 3. Fall back to config default (usually 'classic')
+    STORM_MODES = {'storm_decision', 'storm_research', 'storm_review'}
+
+    if args.pipeline:
+        pipeline_name = args.pipeline
+    elif args.mode in STORM_MODES:
+        pipeline_name = 'storm'
     else:
-        result = asyncio.run(run_council(config))
+        pipeline_name = config_defaults.pipeline
+
+    # Get pipeline class and instantiate
+    PipelineClass = get_pipeline(pipeline_name)
+    pipeline = PipelineClass(config)
+
+    # Execute pipeline
+    pipeline_result = asyncio.run(pipeline.run())
+
+    # Convert PipelineResult to dict for output
+    result = pipeline_result.raw_result or {
+        'answer': pipeline_result.answer,
+        'confidence': pipeline_result.confidence,
+        'mode': pipeline_result.mode_used,
+        'rounds': pipeline_result.rounds,
+        'trail_file': pipeline_result.trail_file,
+        'pipeline': pipeline_result.pipeline,
+    }
+
+    # Add STORM-specific fields if present
+    if pipeline_result.knowledge_base:
+        result['knowledge_base'] = pipeline_result.knowledge_base
+    if pipeline_result.evidence_coverage is not None:
+        result['evidence_coverage'] = pipeline_result.evidence_coverage
+    if pipeline_result.unresolved_objections:
+        result['unresolved_objections'] = pipeline_result.unresolved_objections
 
     if config.output_level == 'audit':
         print(json.dumps(result, indent=2))
