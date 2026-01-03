@@ -97,6 +97,33 @@ Choose how the AI models work together:
 
 ⭐ **Default mode**: If you just say *"Ask the council: [question]"*, it uses **Consensus** mode automatically.
 
+### 🌩️ STORM Modes (New!)
+
+Evidence-grounded workflow graphs inspired by [STORM/Co-STORM research](https://arxiv.org/abs/2402.14207):
+
+| Mode | Best For | What Happens |
+|------|----------|--------------|
+| **storm_decision** | Architecture decisions, tech choices | Options → Rubric scoring → Red-team → Recommendation with tripwires |
+| **storm_research** | Deep dives, explanations | Perspectives → Questions → Draft → Critique → Final report |
+| **storm_review** | Code reviews, security audits | Static scan → Threat model → Quality analysis → Patch suggestions |
+
+```bash
+# Decision with structured workflow
+python3 skills/council/scripts/council.py --mode storm_decision --query "Microservices vs monolith?"
+
+# Research with multi-perspective analysis
+python3 skills/council/scripts/council.py --mode storm_research --query "Explain event sourcing"
+
+# Code review with threat modeling
+python3 skills/council/scripts/council.py --mode storm_review --query "Review this auth module" --context-file auth.py
+```
+
+**Key STORM features:**
+- **KnowledgeBase** — Tracks claims, evidence, and decisions across the workflow
+- **Evidence-aware convergence** — Confidence factors in evidence coverage, not just agreement
+- **Moderator routing** — Detects shallow consensus and triggers deeper analysis
+- **Rich trail files** — KB snapshots, workflow node results, evidence reports
+
 ### 📋 Full Reasoning Trail
 
 Every deliberation is automatically saved so you can see exactly how the AIs reached their conclusion:
@@ -341,15 +368,20 @@ Reference guides in `skills/council/references/`:
 
 ## Recent Improvements
 
+- [x] **Real Evidence Retrieval** — Researcher agent now performs actual repo/doc search with term extraction
+- [x] **Source Reliability Scoring** — Multi-factor scoring (source type, authority indicators, snippet quality)
+- [x] **Key Term Extraction** — Intelligent extraction of CamelCase, snake_case, acronyms from claims
+- [x] **STORM Pipeline** — Evidence-grounded workflow graphs (decision, research, code-review)
+- [x] **KnowledgeBase** — Shared artifact tracking claims, sources, and decisions
+- [x] **Evidence-aware Convergence** — Confidence factors in evidence coverage
+- [x] **Moderator Agent** — Workflow detection, shallow consensus detection
+- [x] **Trail Files** — STORM trails with KB snapshots, node results, evidence reports
 - [x] **Direct Mode** — Query models directly with `--direct` flag, no deliberation
 - [x] **Natural Language Triggers** — "Ask Claude directly", "Just Gemini's opinion", etc.
 - [x] **Peer Review Score Fix** — Auto-detect 0-5 vs 0-20 scale, display correct totals
 - [x] **Skill Cleanup** — Tests and trails moved outside skill package (72KB → 35 files)
 - [x] **Timeout Flag Fixed** — `--timeout` now properly respected (was hardcoded to 420s)
 - [x] **Session State Reset** — All global state properly cleared between sessions
-- [x] **Trail IO Error Handling** — Added try/except for constrained filesystems
-- [x] **Thread-Safe State** — Added threading locks for concurrent safety
-- [x] **SOTA Skill Structure** — Refactored SKILL.md for progressive disclosure
 
 ## Development
 
@@ -364,10 +396,15 @@ python3 -m pytest tests/ -v
 Future improvements identified by Council self-evaluation:
 
 - [x] **Core Logic Tests** — Unit tests for deliberation engine, convergence algorithm, persona generation
+- [x] **STORM Workflows** — Decision, Research, Code Review graphs with evidence tracking
+- [x] **KnowledgeBase** — Shared artifact for claims, sources, and decisions
+- [x] **Source Reliability** — Multi-factor reliability scoring for retrieved evidence
+- [x] **Real Evidence Retrieval** — Repo/doc search with key term extraction
+- [ ] **Cross-Model Verification** — Query multiple models to independently verify claims
+- [ ] **Web Retrieval** — Web search integration for external evidence
 - [ ] **Persistent State** — Save circuit breaker state, metrics, adaptive timeouts across sessions (JSON/SQLite)
 - [ ] **CI/CD Pipeline** — GitHub Actions, automated testing, version compatibility matrix
 - [ ] **Benchmarks** — Compare output quality/cost/latency vs single-model baselines
-- [ ] **Health Checks** — Endpoints for container orchestration, graceful SIGTERM handling
 
 ## License
 

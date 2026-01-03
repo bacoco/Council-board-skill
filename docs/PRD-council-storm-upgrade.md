@@ -96,11 +96,81 @@
 - **Tool failures:** Reuse circuit breaker; degraded mode still allowed but confidence penalized.
 
 ## 13) Rollout Plan
-- Phase 1 (MVP): Moderator, KB core, Decision Graph, Researcher/Evidence Judge stubs using existing adapters, evidence-aware confidence, trail snapshots.
-- Phase 2: Research & Code Review graphs, richer rubrics/roles, source reliability scoring.
-- Phase 3: Optional persistence across sessions, UI/mind-map visualization.
 
-## 14) Open Questions
+### Phase 1 (MVP) — ✅ IMPLEMENTED
+- ✅ **Pipeline Abstraction** — Classic vs STORM dual-mode system (`pipelines/base.py`, `classic.py`, `storm.py`)
+- ✅ **KnowledgeBase** — Full implementation with Claims, Sources, Decisions, OpenQuestions (`knowledge_base.py`)
+- ✅ **Moderator Agent** — Workflow detection, shallow consensus detection, routing (`agents/moderator.py`)
+- ✅ **Researcher Agent** — Full implementation with repo/doc search (`agents/researcher.py`)
+- ✅ **Evidence Judge** — Claim evaluation, confidence adjustment (`agents/evidence_judge.py`)
+- ✅ **Convergence Detector** — Classic + evidence-aware modes (`convergence.py`)
+- ✅ **Decision Graph** — 5 nodes with model queries: options → rubric → red-team → evidence → recommendation (`workflows/decision.py`)
+- ✅ **Trail Files** — STORM-specific trail generation with KB snapshots (`core/storm_trail.py`)
+- ✅ **Unit Tests** — Comprehensive test coverage (`tests/test_storm_components.py`)
+
+### Phase 2 — ✅ IMPLEMENTED
+- ✅ **Research Graph** — 7 nodes: perspectives → questions → retrieve → outline → draft → critique → report (`workflows/research.py`)
+- ✅ **Code Review Graph** — 5 nodes: static scan → threat model → quality → patches → checklist (`workflows/code_review.py`)
+- ✅ **Prompt Templates** — All workflow agent prompts (`prompts/storm_prompts.py`)
+- ✅ **Model Query Helpers** — Parallel queries, response parsing (`workflows/model_query.py`)
+
+### Phase 2.5 — ✅ IMPLEMENTED
+- ✅ **Real Evidence Retrieval** — Researcher now performs actual retrieval:
+  - `KeyTermExtractor` — Extracts technical terms (CamelCase, snake_case, acronyms), filters stop words
+  - `RepoSearcher` — Async grep-based repository search with relevance scoring
+  - `DocSearcher` — Pattern-based documentation search with context extraction
+  - `SourceReliabilityScorer` — Multi-factor reliability scoring (source type, authority indicators)
+- ✅ **Cross-Model Verification** — Basic verification based on evidence coverage (full model-based verification pending)
+
+### Phase 3 — 🔲 PLANNED
+- Optional persistence across sessions
+- UI/mind-map visualization
+- Full cross-model claim verification (query multiple models independently)
+- Web retrieval integration
+
+## 14) Implementation Notes
+
+### New STORM Modes
+```bash
+# Decision workflow with options, rubric scoring, red-team
+python3 skills/council/scripts/council.py --mode storm_decision --query "..."
+
+# Research workflow with perspectives and critique
+python3 skills/council/scripts/council.py --mode storm_research --query "..."
+
+# Code review with threat modeling
+python3 skills/council/scripts/council.py --mode storm_review --query "..." --context-file code.py
+```
+
+### New Files Created
+```
+skills/council/
+├── pipelines/          # Pipeline abstraction
+│   ├── __init__.py
+│   ├── base.py
+│   ├── classic.py
+│   └── storm.py
+├── core/
+│   └── storm_trail.py  # STORM trail generation
+├── agents/             # STORM agents
+│   ├── moderator.py
+│   ├── researcher.py
+│   └── evidence_judge.py
+├── workflows/          # Workflow graphs
+│   ├── __init__.py
+│   ├── base.py
+│   ├── decision.py
+│   ├── research.py
+│   ├── code_review.py
+│   └── model_query.py
+├── prompts/            # Prompt templates
+│   ├── __init__.py
+│   └── storm_prompts.py
+├── knowledge_base.py   # Shared KB
+└── convergence.py      # Evidence-aware convergence
+```
+
+## 15) Open Questions
 - Retrieval scope defaults (web vs. repo vs. docs) and opt-in flags.
 - How to score source reliability (static heuristic vs. model-judged).
 - Confidence formula weights (agreement vs. evidence vs. objections vs. diversity) — start with heuristic, tune from logs.

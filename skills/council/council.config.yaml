@@ -21,6 +21,13 @@ max_rounds: 3
 # Options: adaptive, consensus, debate, vote, devil_advocate
 mode: adaptive
 
+# Pipeline selection
+# Options:
+#   classic - Original deliberation pipeline (gather opinions → peer review → synthesis)
+#   storm   - STORM-inspired pipeline with Moderator, KnowledgeBase, and evidence grounding
+# Default: classic (preserves existing behavior)
+pipeline: classic
+
 # Convergence threshold (0.0-1.0)
 # Higher = stricter agreement required before early termination
 convergence_threshold: 0.8

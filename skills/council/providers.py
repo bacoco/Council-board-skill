@@ -26,6 +26,8 @@ class CouncilConfig:
     min_quorum: int = 2
     enable_perf_metrics: bool = False
     enable_trail: bool = True  # Show deliberation trail by default
+    # Pipeline selection: 'classic' (original) or 'storm' (STORM-inspired with Moderator/KB)
+    pipeline: str = 'classic'
 
     @classmethod
     def from_file(cls, path: Path) -> 'CouncilConfig':
@@ -46,7 +48,8 @@ class CouncilConfig:
             convergence_threshold=data.get('convergence_threshold', defaults.convergence_threshold),
             min_quorum=data.get('min_quorum', defaults.min_quorum),
             enable_perf_metrics=data.get('enable_perf_metrics', defaults.enable_perf_metrics),
-            enable_trail=data.get('enable_trail', defaults.enable_trail)
+            enable_trail=data.get('enable_trail', defaults.enable_trail),
+            pipeline=data.get('pipeline', defaults.pipeline)
         )
 
     @classmethod
