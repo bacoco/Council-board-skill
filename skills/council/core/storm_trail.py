@@ -91,6 +91,12 @@ def generate_storm_trail_markdown(
     lines.append("")
 
     for node_id, result in node_results.items():
+        # Handle both dict and NodeResult objects
+        if hasattr(result, 'to_dict'):
+            result = result.to_dict()
+        elif not isinstance(result, dict):
+            result = {'status': 'unknown', 'output': {}}
+
         status = result.get('status', 'unknown')
         status_icon = "✓" if status == 'completed' else "✗" if status == 'failed' else "○"
         latency = result.get('latency_ms', 0)
