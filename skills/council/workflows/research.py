@@ -11,6 +11,7 @@ Flow (from PRD):
 7. Final Report: Synthesize final research report
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -19,7 +20,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .base import WorkflowGraph, WorkflowNode, WorkflowState, NodeResult, NodeStatus
+from .model_query import query_chairman, query_models_parallel
 from knowledge_base import KnowledgeBase
+from prompts.storm_prompts import (
+    RESEARCH_PERSPECTIVES_PROMPT, RESEARCH_QUESTIONS_PROMPT,
+    RESEARCH_DRAFT_PROMPT, RESEARCH_CRITIQUE_PROMPT, format_prompt
+)
 
 
 @dataclass
@@ -132,32 +138,40 @@ class ResearchGraph(WorkflowGraph):
         """
         Node 1: Identify perspectives on the topic.
 
-        In full implementation, would query models for diverse perspectives.
+        Queries the chairman model for diverse perspectives.
         """
-        # Extract topic from query
-        topic = state.query
+        import time
+        start = time.time()
 
-        # Placeholder perspectives (would come from model analysis)
-        self._perspectives = [
-            Perspective(
-                id="p_technical",
-                name="Technical",
-                description="Technical/implementation perspective",
-                key_questions=["How does it work technically?", "What are the components?"]
-            ),
-            Perspective(
-                id="p_practical",
-                name="Practical",
-                description="Practical usage perspective",
-                key_questions=["How is it used in practice?", "What are common patterns?"]
-            ),
-            Perspective(
-                id="p_comparative",
-                name="Comparative",
-                description="Comparison with alternatives",
-                key_questions=["How does it compare to alternatives?", "What are tradeoffs?"]
-            )
-        ]
+        # Build prompt
+        prompt = format_prompt(
+            RESEARCH_PERSPECTIVES_PROMPT,
+            query=state.query
+        )
+
+        # Query chairman for perspectives
+        result = await query_chairman(prompt, state.chairman, state.timeout)
+        latency = int((time.time() - start) * 1000)
+
+        if not result.success:
+            # Fallback to default perspectives
+            self._perspectives = [
+                Perspective(
+                    id="p_technical",
+                    name="Technical",
+                    description="Technical/implementation perspective",
+                    key_questions=["How does it work technically?", "What are the components?"]
+                ),
+                Perspective(
+                    id="p_practical",
+                    name="Practical",
+                    description="Practical usage perspective",
+                    key_questions=["How is it used in practice?", "What are common patterns?"]
+                )
+            ]
+        else:
+            # Parse perspectives from response
+            self._perspectives = self._parse_perspectives(result.content)
 
         # Add concepts to KB
         for p in self._perspectives:
@@ -172,14 +186,48 @@ class ResearchGraph(WorkflowGraph):
             node_id="perspectives",
             status=NodeStatus.COMPLETED,
             output={
-                'topic': topic[:100],
+                'topic': state.query[:100],
                 'perspectives_count': len(self._perspectives),
                 'perspectives': [
                     {'id': p.id, 'name': p.name, 'questions': p.key_questions}
                     for p in self._perspectives
                 ]
-            }
+            },
+            latency_ms=latency
         )
+
+    def _parse_perspectives(self, response: str) -> List[Perspective]:
+        """Parse perspectives from model response."""
+        perspectives = []
+        pattern = r'##\s*Perspective\s*\d+:\s*(.+?)(?=##\s*Perspective|\Z)'
+        matches = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
+
+        for i, match in enumerate(matches):
+            lines = match.strip().split('\n')
+            name = lines[0].strip() if lines else f"Perspective {i+1}"
+
+            # Extract focus
+            focus_match = re.search(r'Focus:\s*(.+?)(?:\n|$)', match, re.IGNORECASE)
+            description = focus_match.group(1).strip() if focus_match else ""
+
+            # Extract questions
+            questions = []
+            questions_section = re.search(r'Key Questions:\s*(.+?)(?=##|\Z)', match, re.DOTALL | re.IGNORECASE)
+            if questions_section:
+                for line in questions_section.group(1).split('\n'):
+                    if line.strip().startswith('-'):
+                        questions.append(line.strip().lstrip('- '))
+
+            perspectives.append(Perspective(
+                id=f"p_{i+1}",
+                name=name,
+                description=description,
+                key_questions=questions[:3] if questions else [f"What about {name}?"]
+            ))
+
+        return perspectives if perspectives else [
+            Perspective("p_1", "General", "General analysis", ["What are the key aspects?"])
+        ]
 
     async def _node_question_plan(self, state: WorkflowState) -> NodeResult:
         """
@@ -257,23 +305,45 @@ class ResearchGraph(WorkflowGraph):
         """
         Node 5: Generate draft report.
 
-        In full implementation, would synthesize from outline + evidence.
+        Queries the chairman model to synthesize a comprehensive draft.
         """
-        # Build draft from outline
-        draft_parts = [f"# Research: {state.query}\n"]
+        import time
+        start = time.time()
 
-        for section in self._outline:
-            draft_parts.append(f"\n## {section.title}\n")
-            for point in section.key_points:
-                draft_parts.append(f"- {point}\n")
+        # Format outline for prompt
+        outline_text = "\n".join([
+            f"## {s.title}\n" + "\n".join(f"- {p}" for p in s.key_points)
+            for s in self._outline
+        ])
 
-        self._draft = ''.join(draft_parts)
+        # Build prompt
+        prompt = format_prompt(
+            RESEARCH_DRAFT_PROMPT,
+            query=state.query,
+            outline=outline_text,
+            findings="(Based on structured analysis of the topic)"
+        )
+
+        # Query chairman for draft
+        result = await query_chairman(prompt, state.chairman, state.timeout)
+        latency = int((time.time() - start) * 1000)
+
+        if result.success:
+            self._draft = result.content
+        else:
+            # Fallback: build simple draft from outline
+            draft_parts = [f"# Research: {state.query}\n"]
+            for section in self._outline:
+                draft_parts.append(f"\n## {section.title}\n")
+                for point in section.key_points:
+                    draft_parts.append(f"- {point}\n")
+            self._draft = ''.join(draft_parts)
 
         # Add draft as a claim
         claim = state.kb.add_claim(
             text=f"Draft report generated with {len(self._outline)} sections",
             owner="research_graph",
-            confidence=0.6,
+            confidence=0.6 if not result.success else 0.75,
             round_num=1
         )
 
@@ -285,21 +355,38 @@ class ResearchGraph(WorkflowGraph):
                 'sections': len(self._outline),
                 'preview': self._draft[:500] + '...' if len(self._draft) > 500 else self._draft
             },
-            claims_added=[claim.id]
+            claims_added=[claim.id],
+            latency_ms=latency
         )
 
     async def _node_critique(self, state: WorkflowState) -> NodeResult:
         """
         Node 6: Self-critique the draft.
 
-        Identifies gaps and areas for improvement.
+        Queries models to identify gaps and weaknesses.
         """
-        # Placeholder critique (would come from model analysis)
-        critiques = [
-            "Draft lacks concrete examples",
-            "Comparative section could be more detailed",
-            "Missing recent developments"
-        ]
+        import time
+        start = time.time()
+
+        # Build prompt
+        prompt = format_prompt(
+            RESEARCH_CRITIQUE_PROMPT,
+            draft=self._draft[:4000],  # Limit draft length
+            query=state.query
+        )
+
+        # Query chairman for critique
+        result = await query_chairman(prompt, state.chairman, state.timeout)
+        latency = int((time.time() - start) * 1000)
+
+        if result.success:
+            critiques = self._parse_critique(result.content)
+        else:
+            # Fallback critiques
+            critiques = [
+                "Draft could benefit from additional examples",
+                "Consider adding more specific details"
+            ]
 
         # Add critiques as open questions
         questions_added = []
@@ -316,11 +403,39 @@ class ResearchGraph(WorkflowGraph):
             status=NodeStatus.COMPLETED,
             output={
                 'critiques': critiques,
-                'severity': 'minor',
+                'severity': 'minor' if len(critiques) <= 2 else 'moderate',
                 'actionable': True
             },
-            questions_added=questions_added
+            questions_added=questions_added,
+            latency_ms=latency
         )
+
+    def _parse_critique(self, response: str) -> List[str]:
+        """Parse critique points from model response."""
+        critiques = []
+
+        # Look for GAPS section
+        gaps_match = re.search(r'GAPS:\s*(.+?)(?=UNSUPPORTED|AREAS|CONCERNS|\Z)', response, re.DOTALL | re.IGNORECASE)
+        if gaps_match:
+            for line in gaps_match.group(1).split('\n'):
+                if line.strip().startswith('-'):
+                    critiques.append(line.strip().lstrip('- '))
+
+        # Look for UNSUPPORTED CLAIMS section
+        unsupported_match = re.search(r'UNSUPPORTED CLAIMS:\s*(.+?)(?=AREAS|CONCERNS|\Z)', response, re.DOTALL | re.IGNORECASE)
+        if unsupported_match:
+            for line in unsupported_match.group(1).split('\n'):
+                if line.strip().startswith('-'):
+                    critiques.append(line.strip().lstrip('- '))
+
+        # Look for AREAS NEEDING DEPTH
+        areas_match = re.search(r'AREAS NEEDING DEPTH:\s*(.+?)(?=CONCERNS|\Z)', response, re.DOTALL | re.IGNORECASE)
+        if areas_match:
+            for line in areas_match.group(1).split('\n'):
+                if line.strip().startswith('-'):
+                    critiques.append(line.strip().lstrip('- '))
+
+        return critiques[:5] if critiques else ["Review for completeness"]
 
     async def _node_final_report(self, state: WorkflowState) -> NodeResult:
         """

@@ -9,6 +9,7 @@ Flow (from PRD):
 5. Final Checklist: Consolidated review checklist
 """
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -18,7 +19,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .base import WorkflowGraph, WorkflowNode, WorkflowState, NodeResult, NodeStatus
+from .model_query import query_chairman, query_models_parallel, parse_threats, parse_issues
 from knowledge_base import KnowledgeBase, ClaimStatus
+from prompts.storm_prompts import (
+    REVIEW_STATIC_SCAN_PROMPT, REVIEW_THREAT_MODEL_PROMPT,
+    REVIEW_QUALITY_PROMPT, REVIEW_PATCHES_PROMPT, format_prompt
+)
 
 
 class IssueSeverity(Enum):
@@ -134,8 +140,11 @@ class CodeReviewGraph(WorkflowGraph):
         """
         Node 1: Static code analysis.
 
-        In full implementation, would analyze code context for issues.
+        Queries models to analyze code for issues.
         """
+        import time
+        start = time.time()
+
         # Check if we have code context
         has_code = bool(state.context and len(state.context) > 50)
 
@@ -150,25 +159,43 @@ class CodeReviewGraph(WorkflowGraph):
                 }
             )
 
-        # Placeholder issues (would come from actual code analysis)
-        self._issues = [
-            CodeIssue(
-                id="issue_1",
-                category=IssueCategory.SECURITY,
-                severity=IssueSeverity.MEDIUM,
-                title="Potential input validation issue",
-                description="User input should be validated before use",
-                suggestion="Add input validation/sanitization"
-            ),
-            CodeIssue(
-                id="issue_2",
-                category=IssueCategory.MAINTAINABILITY,
-                severity=IssueSeverity.LOW,
-                title="Complex function",
-                description="Function could be split for better readability",
-                suggestion="Consider extracting helper functions"
-            )
-        ]
+        # Build prompt
+        prompt = format_prompt(
+            REVIEW_STATIC_SCAN_PROMPT,
+            code=state.context[:8000],  # Limit code length
+            focus="security, performance, maintainability, correctness"
+        )
+
+        # Query chairman for analysis
+        result = await query_chairman(prompt, state.chairman, state.timeout)
+        latency = int((time.time() - start) * 1000)
+
+        if result.success:
+            parsed_issues = parse_issues(result.content)
+            self._issues = [
+                CodeIssue(
+                    id=issue['id'],
+                    category=IssueCategory(issue.get('category', 'correctness')),
+                    severity=IssueSeverity(issue.get('severity', 'medium')),
+                    title=issue.get('description', 'Issue')[:50],
+                    description=issue.get('description', ''),
+                    location=issue.get('location'),
+                    suggestion=issue.get('suggestion')
+                )
+                for issue in parsed_issues
+            ]
+        else:
+            # Fallback issues
+            self._issues = [
+                CodeIssue(
+                    id="issue_1",
+                    category=IssueCategory.CORRECTNESS,
+                    severity=IssueSeverity.MEDIUM,
+                    title="Code review pending",
+                    description="Model analysis unavailable - manual review recommended",
+                    suggestion="Review code manually"
+                )
+            ]
 
         # Add issues as claims to KB
         claims_added = []
@@ -198,15 +225,19 @@ class CodeReviewGraph(WorkflowGraph):
                     for i in self._issues
                 ]
             },
-            claims_added=claims_added
+            claims_added=claims_added,
+            latency_ms=latency
         )
 
     async def _node_threat_model(self, state: WorkflowState) -> NodeResult:
         """
         Node 2: Security threat modeling.
 
-        Identifies potential security threats and attack vectors.
+        Queries models for security threat analysis.
         """
+        import time
+        start = time.time()
+
         # Get static scan results
         scan_output = state.get_node_output("static_scan") or {}
 
@@ -220,18 +251,44 @@ class CodeReviewGraph(WorkflowGraph):
                 }
             )
 
-        # Placeholder threats (would come from security analysis)
-        self._threats = [
-            Threat(
-                id="threat_1",
-                name="Injection Attack",
-                description="Potential for injection if input not sanitized",
-                attack_vector="Malicious user input",
-                impact="Data breach or system compromise",
-                mitigation="Implement input validation and parameterized queries",
-                severity=IssueSeverity.HIGH
-            )
-        ]
+        # Build prompt
+        prompt = format_prompt(
+            REVIEW_THREAT_MODEL_PROMPT,
+            code=state.context[:6000],
+            context=state.query
+        )
+
+        # Query chairman for threat analysis
+        result = await query_chairman(prompt, state.chairman, state.timeout)
+        latency = int((time.time() - start) * 1000)
+
+        if result.success:
+            parsed_threats = parse_threats(result.content)
+            self._threats = [
+                Threat(
+                    id=t['id'],
+                    name=t['name'],
+                    description=t.get('attack_vector', ''),
+                    attack_vector=t.get('attack_vector', ''),
+                    impact=t.get('impact', ''),
+                    mitigation=t.get('mitigation', ''),
+                    severity=IssueSeverity(t.get('severity', 'medium'))
+                )
+                for t in parsed_threats
+            ]
+        else:
+            # Fallback threat
+            self._threats = [
+                Threat(
+                    id="threat_1",
+                    name="General Security Review",
+                    description="Model analysis unavailable",
+                    attack_vector="Various",
+                    impact="Unknown without analysis",
+                    mitigation="Manual security review recommended",
+                    severity=IssueSeverity.MEDIUM
+                )
+            ]
 
         # Add threats as claims
         claims_added = []
@@ -261,28 +318,63 @@ class CodeReviewGraph(WorkflowGraph):
                 ],
                 'high_severity_count': sum(1 for t in self._threats if t.severity in [IssueSeverity.CRITICAL, IssueSeverity.HIGH])
             },
-            claims_added=claims_added
+            claims_added=claims_added,
+            latency_ms=latency
         )
 
     async def _node_quality_analysis(self, state: WorkflowState) -> NodeResult:
         """
         Node 3: Performance and maintainability analysis.
+
+        Queries models for quality assessment.
         """
+        import time
+        start = time.time()
+
         scan_output = state.get_node_output("static_scan") or {}
 
-        # Filter for quality-related issues
+        if not scan_output.get('has_code'):
+            return NodeResult(
+                node_id="quality_analysis",
+                status=NodeStatus.COMPLETED,
+                output={
+                    'note': 'Limited quality analysis without code context',
+                    'quality_issues': 0,
+                    'metrics': {},
+                    'recommendations': []
+                }
+            )
+
+        # Build prompt
+        prompt = format_prompt(
+            REVIEW_QUALITY_PROMPT,
+            code=state.context[:6000]
+        )
+
+        # Query chairman for quality analysis
+        result = await query_chairman(prompt, state.chairman, state.timeout)
+        latency = int((time.time() - start) * 1000)
+
+        if result.success:
+            metrics, recommendations = self._parse_quality_response(result.content)
+        else:
+            metrics = {
+                'complexity': 'unknown',
+                'test_coverage': 'unknown',
+                'documentation': 'unknown',
+                'code_style': 'unknown'
+            }
+            recommendations = [
+                "Manual quality review recommended",
+                "Consider adding unit tests",
+                "Review documentation coverage"
+            ]
+
+        # Filter for quality-related issues from static scan
         quality_issues = [
             i for i in self._issues
             if i.category in [IssueCategory.PERFORMANCE, IssueCategory.MAINTAINABILITY]
         ]
-
-        # Placeholder quality metrics
-        metrics = {
-            'complexity': 'medium',  # Would be calculated from code
-            'test_coverage': 'unknown',
-            'documentation': 'sparse',
-            'code_style': 'mostly_consistent'
-        }
 
         return NodeResult(
             node_id="quality_analysis",
@@ -290,13 +382,35 @@ class CodeReviewGraph(WorkflowGraph):
             output={
                 'quality_issues': len(quality_issues),
                 'metrics': metrics,
-                'recommendations': [
-                    "Consider adding unit tests",
-                    "Add docstrings to public functions",
-                    "Review function complexity"
-                ]
-            }
+                'recommendations': recommendations
+            },
+            latency_ms=latency
         )
+
+    def _parse_quality_response(self, response: str) -> tuple:
+        """Parse quality analysis from model response."""
+        metrics = {}
+        recommendations = []
+
+        # Extract scores for each category
+        for category in ['Performance', 'Maintainability', 'Best Practices']:
+            score_match = re.search(rf'{category}\s*\n\s*Score:\s*(\d+)', response, re.IGNORECASE)
+            if score_match:
+                metrics[category.lower()] = int(score_match.group(1))
+
+        # Extract recommendations
+        rec_match = re.search(r'Recommendations:\s*(.+?)(?=##|\Z)', response, re.DOTALL | re.IGNORECASE)
+        if rec_match:
+            for line in rec_match.group(1).split('\n'):
+                if line.strip().startswith('-'):
+                    recommendations.append(line.strip().lstrip('- '))
+
+        # Extract overall quality
+        overall_match = re.search(r'OVERALL QUALITY:\s*(\d+)', response, re.IGNORECASE)
+        if overall_match:
+            metrics['overall'] = int(overall_match.group(1))
+
+        return metrics, recommendations[:5] if recommendations else ["Review code quality"]
 
     async def _node_patches(self, state: WorkflowState) -> NodeResult:
         """
