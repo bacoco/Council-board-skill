@@ -11,6 +11,7 @@ Implementation: Uses text-matching heuristics for claim-evidence relevance.
 Future: Can be enhanced with LLM-based semantic matching.
 """
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from knowledge_base import KnowledgeBase, Claim, Source, ClaimStatus
+
+
+# Common stop words to filter from term extraction
+_STOP_WORDS = {
+    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+    'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been',
+    'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'must', 'shall', 'can', 'need', 'this', 'that',
+    'these', 'those', 'it', 'its', 'they', 'them', 'their', 'we', 'our', 'you',
+    'your', 'he', 'she', 'him', 'her', 'his', 'who', 'which', 'what', 'when',
+    'where', 'why', 'how', 'all', 'each', 'every', 'both', 'few', 'more',
+    'most', 'other', 'some', 'such', 'not', 'only', 'own', 'same', 'than',
+    'too', 'very', 'just', 'also', 'now', 'here', 'there', 'then', 'once'
+}
 
 
 class EvidenceRelation(Enum):
