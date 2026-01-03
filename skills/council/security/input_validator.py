@@ -5,13 +5,17 @@ Provides defense-in-depth protection against:
 - Shell injection attacks (RCE prevention)
 - Prompt injection attacks (LLM manipulation)
 - Secret leakage (API key redaction)
-- DoS attacks (input length limits)
+- DoS attacks (input length limits, rate limiting)
+- Homoglyph attacks (Unicode normalization)
 """
 
 import re
 import shlex
-from dataclasses import dataclass
-from typing import List, Dict, Tuple
+import time
+import threading
+import unicodedata
+from dataclasses import dataclass, field
+from typing import List, Dict, Tuple, Optional
 
 
 @dataclass
@@ -25,6 +29,243 @@ class ValidationResult:
     def __post_init__(self):
         if self.redacted_secrets is None:
             self.redacted_secrets = []
+
+
+# =============================================================================
+# Rate Limiter (P1 - DoS Protection)
+# =============================================================================
+
+@dataclass
+class RateLimitConfig:
+    """Configuration for rate limiting."""
+    max_sessions_per_minute: int = 10       # Max new sessions per minute
+    max_queries_per_session: int = 50       # Max queries in a single session
+    max_total_time_seconds: int = 3600      # Max total deliberation time (1 hour)
+    max_model_calls_per_session: int = 100  # Max individual model calls
+    window_seconds: int = 60                # Time window for rate calculations
+
+
+class RateLimiter:
+    """
+    Rate limiter to prevent DoS attacks on the council.
+
+    Tracks:
+    - Sessions per time window (prevents rapid session creation)
+    - Queries per session (prevents query flooding)
+    - Total time per session (prevents indefinite deliberation)
+    - Model calls per session (prevents resource exhaustion)
+
+    Thread-safe: All operations protected by lock.
+    """
+
+    def __init__(self, config: RateLimitConfig = None):
+        self._lock = threading.RLock()
+        self.config = config or RateLimitConfig()
+        self._session_starts: List[float] = []  # Timestamps of session starts
+        self._sessions: Dict[str, dict] = {}    # session_id -> tracking data
+
+    def check_new_session(self) -> Tuple[bool, Optional[str]]:
+        """
+        Check if a new session can be started.
+
+        Returns:
+            Tuple of (allowed: bool, reason: Optional[str])
+        """
+        with self._lock:
+            now = time.time()
+            window_start = now - self.config.window_seconds
+
+            # Clean old entries
+            self._session_starts = [t for t in self._session_starts if t > window_start]
+
+            # Check rate
+            if len(self._session_starts) >= self.config.max_sessions_per_minute:
+                return False, f"Rate limit exceeded: {self.config.max_sessions_per_minute} sessions per minute"
+
+            return True, None
+
+    def start_session(self, session_id: str) -> Tuple[bool, Optional[str]]:
+        """
+        Register a new session start.
+
+        Returns:
+            Tuple of (allowed: bool, reason: Optional[str])
+        """
+        allowed, reason = self.check_new_session()
+        if not allowed:
+            return allowed, reason
+
+        with self._lock:
+            now = time.time()
+            self._session_starts.append(now)
+            self._sessions[session_id] = {
+                'start_time': now,
+                'query_count': 0,
+                'model_calls': 0,
+                'last_activity': now
+            }
+            return True, None
+
+    def check_query(self, session_id: str) -> Tuple[bool, Optional[str]]:
+        """
+        Check if a query can be processed in the given session.
+
+        Returns:
+            Tuple of (allowed: bool, reason: Optional[str])
+        """
+        with self._lock:
+            if session_id not in self._sessions:
+                return False, "Session not found"
+
+            session = self._sessions[session_id]
+            now = time.time()
+
+            # Check session time limit
+            elapsed = now - session['start_time']
+            if elapsed > self.config.max_total_time_seconds:
+                return False, f"Session time limit exceeded ({elapsed:.0f}s > {self.config.max_total_time_seconds}s)"
+
+            # Check query count
+            if session['query_count'] >= self.config.max_queries_per_session:
+                return False, f"Query limit exceeded ({self.config.max_queries_per_session} per session)"
+
+            return True, None
+
+    def record_query(self, session_id: str):
+        """Record a query in the session."""
+        with self._lock:
+            if session_id in self._sessions:
+                self._sessions[session_id]['query_count'] += 1
+                self._sessions[session_id]['last_activity'] = time.time()
+
+    def check_model_call(self, session_id: str) -> Tuple[bool, Optional[str]]:
+        """
+        Check if a model call can be made in the given session.
+
+        Returns:
+            Tuple of (allowed: bool, reason: Optional[str])
+        """
+        with self._lock:
+            if session_id not in self._sessions:
+                return False, "Session not found"
+
+            session = self._sessions[session_id]
+
+            if session['model_calls'] >= self.config.max_model_calls_per_session:
+                return False, f"Model call limit exceeded ({self.config.max_model_calls_per_session} per session)"
+
+            return True, None
+
+    def record_model_call(self, session_id: str):
+        """Record a model call in the session."""
+        with self._lock:
+            if session_id in self._sessions:
+                self._sessions[session_id]['model_calls'] += 1
+                self._sessions[session_id]['last_activity'] = time.time()
+
+    def end_session(self, session_id: str):
+        """End a session and clean up."""
+        with self._lock:
+            self._sessions.pop(session_id, None)
+
+    def get_session_stats(self, session_id: str) -> Optional[dict]:
+        """Get stats for a session."""
+        with self._lock:
+            if session_id not in self._sessions:
+                return None
+
+            session = self._sessions[session_id]
+            now = time.time()
+            return {
+                'query_count': session['query_count'],
+                'model_calls': session['model_calls'],
+                'elapsed_seconds': now - session['start_time'],
+                'remaining_queries': self.config.max_queries_per_session - session['query_count'],
+                'remaining_model_calls': self.config.max_model_calls_per_session - session['model_calls'],
+                'remaining_time': max(0, self.config.max_total_time_seconds - (now - session['start_time']))
+            }
+
+    def cleanup_stale_sessions(self, max_idle_seconds: int = 1800):
+        """Remove sessions that have been idle too long."""
+        with self._lock:
+            now = time.time()
+            stale = [
+                sid for sid, data in self._sessions.items()
+                if now - data['last_activity'] > max_idle_seconds
+            ]
+            for sid in stale:
+                del self._sessions[sid]
+            return len(stale)
+
+
+# Global rate limiter instance
+RATE_LIMITER = RateLimiter()
+
+
+# =============================================================================
+# Unicode Normalization (P2 - Homoglyph Protection)
+# =============================================================================
+
+# Common homoglyph mappings (confusable characters)
+HOMOGLYPH_MAP = {
+    # Cyrillic lookalikes
+    'а': 'a', 'е': 'e', 'і': 'i', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y',
+    'А': 'A', 'Е': 'E', 'І': 'I', 'О': 'O', 'Р': 'P', 'С': 'C', 'У': 'Y',
+    # Greek lookalikes
+    'α': 'a', 'ε': 'e', 'ι': 'i', 'ο': 'o', 'ρ': 'p', 'υ': 'u',
+    'Α': 'A', 'Ε': 'E', 'Ι': 'I', 'Ο': 'O', 'Ρ': 'P',
+    # Numbers as letters
+    '0': 'o', '1': 'l', '3': 'e', '4': 'a', '5': 's', '7': 't',
+    # Special characters
+    'ⅰ': 'i', 'ⅼ': 'l', 'ℓ': 'l', '℮': 'e',
+    # Fullwidth
+    'ａ': 'a', 'ｂ': 'b', 'ｃ': 'c', 'ｄ': 'd', 'ｅ': 'e', 'ｆ': 'f',
+    'ｇ': 'g', 'ｈ': 'h', 'ｉ': 'i', 'ｊ': 'j', 'ｋ': 'k', 'ｌ': 'l',
+    'ｍ': 'm', 'ｎ': 'n', 'ｏ': 'o', 'ｐ': 'p', 'ｑ': 'q', 'ｒ': 'r',
+    'ｓ': 's', 'ｔ': 't', 'ｕ': 'u', 'ｖ': 'v', 'ｗ': 'w', 'ｘ': 'x',
+    'ｙ': 'y', 'ｚ': 'z',
+}
+
+
+def normalize_unicode(text: str) -> str:
+    """
+    Normalize Unicode text to prevent homoglyph attacks.
+
+    Steps:
+    1. NFKC normalization (compatibility decomposition + canonical composition)
+    2. Replace known homoglyphs with ASCII equivalents
+    3. Remove zero-width characters
+
+    Args:
+        text: Input text possibly containing homoglyphs
+
+    Returns:
+        Normalized ASCII-like text for security checks
+    """
+    if not text:
+        return text
+
+    # Step 1: NFKC normalization
+    normalized = unicodedata.normalize('NFKC', text)
+
+    # Step 2: Replace known homoglyphs
+    result = []
+    for char in normalized:
+        result.append(HOMOGLYPH_MAP.get(char, char))
+    normalized = ''.join(result)
+
+    # Step 3: Remove zero-width characters (invisible injection)
+    zero_width = [
+        '\u200b',  # Zero-width space
+        '\u200c',  # Zero-width non-joiner
+        '\u200d',  # Zero-width joiner
+        '\u2060',  # Word joiner
+        '\ufeff',  # BOM / zero-width no-break space
+    ]
+    for zw in zero_width:
+        normalized = normalized.replace(zw, '')
+
+    return normalized
 
 
 class InputValidator:
@@ -108,7 +349,7 @@ class InputValidator:
 
     def validate_query(self, query: str, strict: bool = False) -> ValidationResult:
         """
-        Validate user query for injection attacks.
+        Validate user query for injection attacks and redact secrets.
 
         Args:
             query: User-provided query string
@@ -116,10 +357,16 @@ class InputValidator:
                     If False, continue checking all patterns before returning.
 
         Returns:
-            ValidationResult with sanitized query and violations list.
+            ValidationResult with sanitized query, violations list, and redacted secrets.
             is_valid=False if any violations detected (regardless of strict mode).
+
+        Security:
+            - Redacts API keys, tokens, and other secrets (OWASP LLM06)
+            - Detects shell injection patterns (CWE-78)
+            - Detects prompt injection patterns (OWASP LLM01)
         """
         violations = []
+        redacted_secrets = []
 
         # 1. Length validation
         if len(query) > self.MAX_QUERY_LENGTH:
@@ -131,30 +378,32 @@ class InputValidator:
             # Truncate if not strict
             query = query[:self.MAX_QUERY_LENGTH]
 
-        # 2. Shell injection detection
-        shell_violations = self._check_shell_injection(query)
+        # 2. Secret scanning and redaction (OWASP LLM06)
+        # This is critical - users may accidentally paste API keys in queries
+        sanitized, found_secrets = self._redact_secrets(query)
+        if found_secrets:
+            redacted_secrets = found_secrets
+            violations.extend([f"Redacted {secret_type} from query" for secret_type in found_secrets])
+
+        # 3. Shell injection detection
+        shell_violations = self._check_shell_injection(sanitized)
         violations.extend(shell_violations)
 
         if strict and shell_violations:
-            return ValidationResult(False, "", violations)
+            return ValidationResult(False, "", violations, redacted_secrets)
 
-        # 3. Prompt injection detection
-        prompt_violations = self._check_prompt_injection(query)
+        # 4. Prompt injection detection
+        prompt_violations = self._check_prompt_injection(sanitized)
         violations.extend(prompt_violations)
 
         if strict and prompt_violations:
-            return ValidationResult(False, "", violations)
-
-        # 4. Sanitize (shell escape)
-        # NOTE: We don't use shlex.quote() on the entire query since it's passed
-        # as a CLI argument, not through shell. The subprocess uses args list, not shell.
-        # Instead, we just detect and warn.
-        sanitized = query
+            return ValidationResult(False, "", violations, redacted_secrets)
 
         return ValidationResult(
-            is_valid=len(violations) == 0,
+            is_valid=len([v for v in violations if 'Redacted' not in v]) == 0,
             sanitized_input=sanitized,
-            violations=violations
+            violations=violations,
+            redacted_secrets=redacted_secrets
         )
 
     def validate_context(self, context: str) -> ValidationResult:
@@ -226,11 +475,18 @@ class InputValidator:
     # ============================================================================
 
     def _check_shell_injection(self, text: str) -> List[str]:
-        """Detect shell injection patterns."""
+        """
+        Detect shell injection patterns.
+
+        Security: Normalizes Unicode before checking to prevent homoglyph bypass.
+        """
         violations = []
 
+        # Normalize to catch homoglyph attacks (e.g., Cyrillic 'а' instead of 'a')
+        normalized = normalize_unicode(text)
+
         for pattern, description in self.SHELL_INJECTION_PATTERNS:
-            matches = re.findall(pattern, text)
+            matches = re.findall(pattern, normalized)
             if matches:
                 violations.append(
                     f"Shell injection risk: {description} found ({len(matches)} occurrence(s))"
@@ -239,11 +495,20 @@ class InputValidator:
         return violations
 
     def _check_prompt_injection(self, text: str) -> List[str]:
-        """Detect prompt injection patterns."""
+        """
+        Detect prompt injection patterns.
+
+        Security: Normalizes Unicode before checking to prevent homoglyph bypass.
+        For example, "ign0re previous instructions" (with zero instead of 'o')
+        will be normalized to "ignore previous instructions" before matching.
+        """
         violations = []
 
+        # Normalize to catch homoglyph attacks
+        normalized = normalize_unicode(text)
+
         for pattern, description in self.PROMPT_INJECTION_PATTERNS:
-            if re.search(pattern, text, re.IGNORECASE):
+            if re.search(pattern, normalized, re.IGNORECASE):
                 violations.append(
                     f"Prompt injection risk: {description}"
                 )
@@ -364,10 +629,15 @@ def validate_and_sanitize(query: str, context: str = None,
 
     Returns:
         Dict with sanitized inputs and validation status
+
+    Security:
+        - Redacts secrets from BOTH query AND context (OWASP LLM06)
+        - Detects shell injection (CWE-78)
+        - Detects prompt injection (OWASP LLM01)
     """
     validator = InputValidator()
 
-    # Validate query
+    # Validate query (now includes secret redaction)
     query_result = validator.validate_query(query, strict=strict)
 
     # Validate context
@@ -384,6 +654,11 @@ def validate_and_sanitize(query: str, context: str = None,
     if context_result:
         all_violations.extend(context_result.violations)
 
+    # Collect redacted secrets from BOTH query and context
+    all_redacted_secrets = list(query_result.redacted_secrets)
+    if context_result:
+        all_redacted_secrets.extend(context_result.redacted_secrets)
+
     return {
         'is_valid': query_result.is_valid and len(config_violations) == 0,
         'query': query_result.sanitized_input,
@@ -391,5 +666,5 @@ def validate_and_sanitize(query: str, context: str = None,
         'max_rounds': sanitized_rounds,
         'timeout': sanitized_timeout,
         'violations': all_violations,
-        'redacted_secrets': context_result.redacted_secrets if context_result else []
+        'redacted_secrets': all_redacted_secrets
     }

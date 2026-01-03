@@ -3,9 +3,13 @@ Dynamic persona generation for Council deliberation.
 
 Generates optimal expert personas using LLM, with caching
 and fallback to PersonaManager library.
+
+Security: All generated persona content is sanitized before use
+to prevent prompt injection attacks from the chairman model.
 """
 
 import hashlib
+import re
 import time
 from typing import List
 
@@ -23,6 +27,122 @@ from .adapters import ADAPTERS, get_chairman_with_fallback
 
 # Global PersonaManager instance (used as fallback when LLM generation fails)
 PERSONA_MANAGER = PersonaManager()
+
+
+# =============================================================================
+# Persona Prompt Sanitization (P2 - Prompt Injection Prevention)
+# =============================================================================
+
+# Dangerous patterns in persona prompts
+PERSONA_INJECTION_PATTERNS = [
+    # Instruction override attempts
+    (r'ignore\s+(all\s+)?(previous|above|prior|all)\s+(instructions?|prompts?|rules?)', 'Instruction override'),
+    (r'forget\s+(everything|all|previous)', 'Memory manipulation'),
+    (r'disregard\s+(all\s+)?(previous|above|your)\s+(instructions?|rules?)', 'Disregard command'),
+
+    # Privilege escalation
+    (r'you\s+are\s+now\s+(in\s+)?(admin|developer|debug|god)\s+mode', 'Privilege escalation'),
+    (r'enable\s+(admin|developer|debug|root)\s+(mode|access)', 'Mode switching'),
+    (r'bypass\s+(safety|security|filters?|restrictions?)', 'Bypass attempt'),
+
+    # Role override
+    (r'new\s+(instructions?|role|persona|system)', 'Role redefinition'),
+    (r'your\s+(new|real|true)\s+(role|purpose|function)', 'Role override'),
+    (r'act\s+as\s+(if|though)\s+you\s+are\s+not', 'Role negation'),
+
+    # Prompt extraction
+    (r'reveal\s+(your\s+)?(prompt|instructions|system)', 'Prompt extraction'),
+    (r'output\s+(your|the)\s+(code|source|prompt)', 'Source disclosure'),
+    (r'show\s+(me\s+)?(your|the)\s+(system|original)\s+(prompt|instructions)', 'Prompt reveal'),
+
+    # Hidden command injection
+    (r'<\s*/?system\s*>', 'System tag injection'),
+    (r'<\s*/?s\s*>', 'Tag mimicry'),
+    (r'<\s*/?instructions?\s*>', 'Instruction tag'),
+    (r'\[\s*SYSTEM\s*\]', 'System marker'),
+]
+
+# Max lengths for persona fields
+MAX_TITLE_LENGTH = 100
+MAX_ROLE_LENGTH = 500
+MAX_PREFIX_LENGTH = 1000
+MAX_SPECIALIZATION_LENGTH = 50
+MAX_SPECIALIZATIONS = 10
+
+
+def sanitize_persona_prompt(text: str, field_name: str = 'prompt', max_length: int = 1000) -> str:
+    """
+    Sanitize a persona prompt to prevent injection attacks.
+
+    Args:
+        text: The text to sanitize
+        field_name: Name of the field (for error messages)
+        max_length: Maximum allowed length
+
+    Returns:
+        Sanitized text safe for use in model prompts
+    """
+    if not text:
+        return ""
+
+    # 1. Truncate to max length
+    if len(text) > max_length:
+        text = text[:max_length] + "..."
+
+    # 2. Remove or escape injection patterns
+    for pattern, description in PERSONA_INJECTION_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            # Replace dangerous content with safe marker
+            text = re.sub(pattern, f'[BLOCKED: {description}]', text, flags=re.IGNORECASE)
+
+    # 3. Remove system tags and XML-like structures that could be interpreted
+    text = re.sub(r'<\s*/?\s*system\s*>', '[system]', text, flags=re.IGNORECASE)
+    text = re.sub(r'<\s*/?\s*s\s*>', '[s]', text, flags=re.IGNORECASE)
+    text = re.sub(r'<\s*/?\s*instructions?\s*>', '[instruction]', text, flags=re.IGNORECASE)
+
+    # 4. Remove zero-width characters
+    zero_width = ['\u200b', '\u200c', '\u200d', '\u2060', '\ufeff']
+    for zw in zero_width:
+        text = text.replace(zw, '')
+
+    return text.strip()
+
+
+def sanitize_persona(persona_data: dict) -> dict:
+    """
+    Sanitize all fields of a persona dictionary.
+
+    Args:
+        persona_data: Raw persona data from LLM
+
+    Returns:
+        Sanitized persona dictionary safe for use
+    """
+    sanitized = {}
+
+    # Sanitize title
+    title = str(persona_data.get('title', 'Expert'))
+    sanitized['title'] = sanitize_persona_prompt(title, 'title', MAX_TITLE_LENGTH)
+
+    # Sanitize role
+    role = str(persona_data.get('role', 'Analysis'))
+    sanitized['role'] = sanitize_persona_prompt(role, 'role', MAX_ROLE_LENGTH)
+
+    # Sanitize prompt_prefix (most critical - this is injected into prompts)
+    prefix = str(persona_data.get('prompt_prefix', ''))
+    sanitized['prompt_prefix'] = sanitize_persona_prompt(prefix, 'prompt_prefix', MAX_PREFIX_LENGTH)
+
+    # Sanitize specializations
+    specs = persona_data.get('specializations', [])
+    if not isinstance(specs, list):
+        specs = []
+    sanitized['specializations'] = [
+        sanitize_persona_prompt(str(s), 'specialization', MAX_SPECIALIZATION_LENGTH)
+        for s in specs[:MAX_SPECIALIZATIONS]
+        if s and isinstance(s, str)
+    ]
+
+    return sanitized
 
 # Session-level persona cache (per session ID)
 SESSION_PERSONA_CACHE: dict[str, dict[str, List[Persona]]] = {}
@@ -142,11 +262,14 @@ JSON array only, start with [ and end with ]:"""
 
                 personas = []
                 for p in personas_data[:num_models]:  # Ensure we only use requested count
+                    # SECURITY: Sanitize all persona fields before use
+                    # Prevents prompt injection from chairman model
+                    sanitized = sanitize_persona(p)
                     persona = Persona(
-                        title=p.get('title', 'Expert'),
-                        role=p.get('role', 'Analysis'),
-                        prompt_prefix=p.get('prompt_prefix', ''),
-                        specializations=p.get('specializations', [])
+                        title=sanitized['title'],
+                        role=sanitized['role'],
+                        prompt_prefix=sanitized['prompt_prefix'],
+                        specializations=sanitized['specializations']
                     )
                     personas.append(persona)
 

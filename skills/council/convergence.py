@@ -78,27 +78,34 @@ class ConvergenceDetector:
 
     def check_classic(self, round_outputs: List[Dict[str, Any]]) -> ConvergenceResult:
         """
-        Classic convergence check (pre-STORM behavior).
+        Classic convergence check with semantic validation.
 
-        Uses 60% confidence + 40% explicit signals.
+        Security: Does NOT blindly trust model-reported confidence scores.
+        Validates claims against actual semantic agreement between responses.
+        Prevents gaming via spoofed confidence/convergence_signal.
+
+        Uses:
+        - 40% validated confidence (penalized if anomalous)
+        - 40% semantic agreement (computed, not claimed)
+        - 20% convergence signals (only if agreement > 30%)
         """
         if not round_outputs:
             return ConvergenceResult(
                 converged=False,
                 score=0.0,
                 threshold=self.threshold,
-                components={'agreement': 0.0, 'signals': 0.0},
+                components={'agreement': 0.0, 'signals': 0.0, 'semantic': 0.0},
                 reason="No outputs to evaluate",
                 confidence_rationale="No panelist responses received"
             )
 
-        # Calculate average confidence
-        confidences = [
+        # Extract raw claimed values
+        raw_confidences = [
             o.get('confidence', 0.5)
             for o in round_outputs
             if isinstance(o.get('confidence'), (int, float))
         ]
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.5
+        avg_raw_confidence = sum(raw_confidences) / len(raw_confidences) if raw_confidences else 0.5
 
         # Count explicit convergence signals
         converged_count = sum(
@@ -107,21 +114,190 @@ class ConvergenceDetector:
         )
         signal_ratio = converged_count / len(round_outputs)
 
-        # Classic formula: 60% confidence + 40% signals
-        score = 0.6 * avg_confidence + 0.4 * signal_ratio
-        converged = score >= self.threshold
+        # Perform semantic validation
+        semantic_result = self._validate_semantic_agreement(round_outputs)
+        semantic_agreement = semantic_result['agreement']
+        validated_confidence = semantic_result['validated_confidence']
+        anomaly_count = semantic_result['anomaly_count']
+
+        # Calculate raw score (for comparison)
+        raw_score = 0.6 * avg_raw_confidence + 0.4 * signal_ratio
+
+        # Calculate validated score with semantic agreement
+        # Only count signals if there's actual agreement
+        signal_weight = 0.2 if semantic_agreement > 0.3 else 0.0
+        conf_weight = 0.4 + (0.2 - signal_weight)
+
+        validated_score = (
+            conf_weight * validated_confidence +
+            0.4 * semantic_agreement +
+            signal_weight * signal_ratio
+        )
+
+        # Apply anomaly penalty (-15% per anomaly)
+        anomaly_penalty = 1.0 - (anomaly_count * 0.15)
+        validated_score *= max(0.5, anomaly_penalty)
+
+        # Security: require validation for convergence
+        is_validated = (
+            anomaly_count <= len(round_outputs) / 2 and
+            raw_score <= validated_score + 0.2
+        )
+
+        converged = validated_score >= self.threshold and is_validated
 
         return ConvergenceResult(
             converged=converged,
-            score=score,
+            score=validated_score,
             threshold=self.threshold,
             components={
-                'agreement': avg_confidence,
-                'signals': signal_ratio
+                'agreement': validated_confidence,
+                'signals': signal_ratio,
+                'semantic': semantic_agreement,
+                'raw_confidence': avg_raw_confidence,
+                'anomaly_count': anomaly_count
             },
-            reason=f"Agreement: {avg_confidence:.0%}, Signals: {signal_ratio:.0%}",
-            confidence_rationale=self._classic_rationale(avg_confidence, signal_ratio, converged)
+            reason=f"Agreement: {validated_confidence:.0%}, Semantic: {semantic_agreement:.0%}, Signals: {signal_ratio:.0%}",
+            confidence_rationale=self._classic_rationale_secure(
+                validated_confidence, semantic_agreement, signal_ratio,
+                anomaly_count, is_validated, converged
+            )
         )
+
+    def _validate_semantic_agreement(self, round_outputs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Validate confidence claims against actual semantic agreement.
+
+        Returns dict with:
+        - agreement: actual semantic agreement (0.0-1.0)
+        - validated_confidence: adjusted confidence after validation
+        - anomaly_count: number of anomalous responses
+        """
+        import re
+        import math
+
+        if len(round_outputs) < 2:
+            conf = round_outputs[0].get('confidence', 0.5) if round_outputs else 0.5
+            return {
+                'agreement': 1.0,
+                'validated_confidence': conf,
+                'anomaly_count': 0
+            }
+
+        # Extract response texts and confidences
+        responses = []
+        confidences = []
+        for o in round_outputs:
+            text = o.get('response', '') or o.get('text', '') or o.get('argument', '') or str(o)
+            conf = o.get('confidence', 0.5)
+            if isinstance(conf, (int, float)):
+                conf = max(0.0, min(1.0, float(conf)))
+            else:
+                conf = 0.5
+            responses.append(str(text))
+            confidences.append(conf)
+
+        # Compute semantic agreement using key phrase overlap
+        def extract_key_phrases(text):
+            text = text.lower()
+            text = re.sub(r'\*\*|__|```|\n+', ' ', text)
+            text = re.sub(r'[^\w\s]', ' ', text)
+            words = text.split()
+            stopwords = {
+                'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'have',
+                'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
+                'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as',
+                'and', 'but', 'if', 'or', 'because', 'this', 'that', 'these', 'those',
+                'i', 'you', 'he', 'she', 'it', 'we', 'they', 'not', 'so', 'very'
+            }
+            meaningful = [w for w in words if w not in stopwords and len(w) > 2]
+            phrases = set(meaningful)
+            for i in range(len(meaningful) - 1):
+                phrases.add(f"{meaningful[i]} {meaningful[i+1]}")
+            return phrases
+
+        tokenized = [extract_key_phrases(r) for r in responses]
+
+        # Compute pairwise Jaccard similarities
+        n = len(responses)
+        similarities = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                if tokenized[i] and tokenized[j]:
+                    intersection = len(tokenized[i] & tokenized[j])
+                    union = len(tokenized[i] | tokenized[j])
+                    sim = intersection / union if union > 0 else 0.0
+                    similarities.append(sim)
+
+        semantic_agreement = sum(similarities) / len(similarities) if similarities else 0.0
+
+        # Detect confidence anomalies
+        mean_conf = sum(confidences) / len(confidences)
+        variance = sum((c - mean_conf) ** 2 for c in confidences) / len(confidences)
+        stddev = math.sqrt(variance) if variance > 0 else 0.0
+
+        anomaly_count = 0
+        validated_confidences = []
+        for i, conf in enumerate(confidences):
+            penalty = 1.0
+
+            # Check for statistical outlier (high confidence)
+            if stddev > 0:
+                z_score = (conf - mean_conf) / stddev
+                if conf > mean_conf and z_score > 1.5:
+                    penalty *= 0.8
+                    anomaly_count += 1
+
+            # Check for high confidence with low agreement
+            if conf > 0.8 and semantic_agreement < 0.5:
+                penalty *= 0.5
+                if penalty < 0.8:  # Only count once
+                    pass
+                else:
+                    anomaly_count += 1
+
+            # Check response length (short responses are suspicious)
+            if len(responses[i]) < 100:
+                penalty *= 0.7
+
+            validated_confidences.append(conf * penalty)
+
+        avg_validated = sum(validated_confidences) / len(validated_confidences)
+
+        return {
+            'agreement': semantic_agreement,
+            'validated_confidence': avg_validated,
+            'anomaly_count': anomaly_count
+        }
+
+    def _classic_rationale_secure(
+        self,
+        confidence: float,
+        semantic: float,
+        signals: float,
+        anomalies: int,
+        validated: bool,
+        converged: bool
+    ) -> str:
+        """Generate rationale for secure classic convergence."""
+        if converged:
+            return (
+                f"Converged with {confidence:.0%} validated confidence, "
+                f"{semantic:.0%} semantic agreement, and {signals:.0%} explicit signals."
+            )
+        else:
+            issues = []
+            if not validated:
+                issues.append("validation failed")
+            if confidence < 0.7:
+                issues.append(f"low confidence ({confidence:.0%})")
+            if semantic < 0.5:
+                issues.append(f"low semantic agreement ({semantic:.0%})")
+            if signals < 0.5:
+                issues.append(f"few consensus signals ({signals:.0%})")
+            if anomalies > 0:
+                issues.append(f"{anomalies} anomalous response(s)")
+            return f"Not converged due to {' and '.join(issues)}."
 
     def check_evidence_aware(self, round_outputs: List[Dict[str, Any]],
                               kb: KnowledgeBase) -> ConvergenceResult:
