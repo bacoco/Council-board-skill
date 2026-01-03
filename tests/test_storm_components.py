@@ -558,3 +558,341 @@ class TestStormPipelineFlow:
 
         # Should converge but with note about evidence gaps
         assert "evidence" in result.components
+
+
+# =============================================================================
+# Researcher Tests
+# =============================================================================
+
+from agents.researcher import (
+    Researcher, RetrievalRequest, RetrievalResult,
+    KeyTermExtractor, SourceCandidate, SourceReliabilityScorer
+)
+
+
+class TestKeyTermExtractor:
+    """Tests for key term extraction from claims/questions."""
+
+    def test_extract_basic_terms(self):
+        """Should extract significant words from text."""
+        extractor = KeyTermExtractor()
+
+        terms = extractor.extract("What are the best practices for API design?")
+
+        assert len(terms) > 0
+        assert "practices" in terms or "design" in terms
+
+    def test_extract_camelcase_terms(self):
+        """Should preserve CamelCase technical terms."""
+        extractor = KeyTermExtractor()
+
+        terms = extractor.extract("The KnowledgeBase and WorkflowGraph are core components.")
+
+        # CamelCase should be preserved and prioritized
+        assert any("KnowledgeBase" in t or "WorkflowGraph" in t for t in terms)
+
+    def test_extract_snake_case_terms(self):
+        """Should preserve snake_case identifiers."""
+        extractor = KeyTermExtractor()
+
+        terms = extractor.extract("The evidence_coverage function calculates claim support.")
+
+        assert any("evidence_coverage" in t for t in terms)
+
+    def test_extract_acronyms(self):
+        """Should preserve common technical acronyms."""
+        extractor = KeyTermExtractor()
+
+        terms = extractor.extract("The API uses REST over HTTP with JSON payloads.")
+
+        # Check that at least one acronym is captured
+        acronyms = {"API", "REST", "HTTP", "JSON"}
+        assert any(t in acronyms for t in terms)
+
+    def test_filter_stop_words(self):
+        """Should filter out common stop words."""
+        extractor = KeyTermExtractor()
+
+        terms = extractor.extract("The quick brown fox jumps over the lazy dog")
+
+        # Stop words should not appear
+        stop_words = {"the", "over"}
+        for term in terms:
+            assert term.lower() not in stop_words
+
+    def test_extract_quoted_phrases(self):
+        """Should extract quoted exact phrases."""
+        extractor = KeyTermExtractor()
+
+        terms = extractor.extract('Search for "error handling" in the codebase.')
+
+        assert "error handling" in terms
+
+    def test_max_terms_limit(self):
+        """Should respect max_terms limit."""
+        extractor = KeyTermExtractor()
+
+        terms = extractor.extract(
+            "This is a very long sentence with many different technical terms "
+            "like microservices, kubernetes, docker, redis, postgresql, mongodb, "
+            "elasticsearch, kafka, rabbitmq, and more.",
+            max_terms=5
+        )
+
+        assert len(terms) <= 5
+
+
+class TestSourceReliabilityScorer:
+    """Tests for source reliability scoring."""
+
+    def test_score_documentation_source(self):
+        """Documentation sources should have high reliability."""
+        scorer = SourceReliabilityScorer()
+
+        source = SourceCandidate(
+            uri="README.md",
+            snippet="This is official documentation for the project.",
+            source_type="docs",
+            relevance_score=0.8,
+            reliability_score=0.0  # Will be calculated
+        )
+
+        score = scorer.score(source)
+
+        # Docs should have high base score + boost for "official"
+        assert score >= 0.85
+
+    def test_score_repo_source(self):
+        """Repository code sources should have moderate reliability."""
+        scorer = SourceReliabilityScorer()
+
+        source = SourceCandidate(
+            uri="src/utils.py",
+            snippet="def calculate_metrics(): return data",
+            source_type="repo",
+            relevance_score=0.7,
+            reliability_score=0.0
+        )
+
+        score = scorer.score(source)
+
+        assert 0.6 <= score <= 0.9
+
+    def test_score_test_source(self):
+        """Test files should have moderate-high reliability."""
+        scorer = SourceReliabilityScorer()
+
+        source = SourceCandidate(
+            uri="tests/test_utils.py",
+            snippet="def test_calculate_metrics(): assert calc() == expected",
+            source_type="test",
+            relevance_score=0.8,
+            reliability_score=0.0
+        )
+
+        score = scorer.score(source)
+
+        assert score >= 0.7
+
+    def test_authority_boost(self):
+        """Sources with authority indicators should get score boost."""
+        scorer = SourceReliabilityScorer()
+
+        source_without = SourceCandidate(
+            uri="notes.md",
+            snippet="Some random notes about the project.",
+            source_type="docs",
+            relevance_score=0.5,
+            reliability_score=0.0
+        )
+
+        source_with = SourceCandidate(
+            uri="specification.md",
+            snippet="Official specification document for the RFC standard.",
+            source_type="docs",
+            relevance_score=0.5,
+            reliability_score=0.0
+        )
+
+        score_without = scorer.score(source_without)
+        score_with = scorer.score(source_with)
+
+        # Authority indicators should boost score
+        assert score_with > score_without
+
+    def test_short_snippet_penalty(self):
+        """Very short snippets should have lower reliability."""
+        scorer = SourceReliabilityScorer()
+
+        short_source = SourceCandidate(
+            uri="config.yaml",
+            snippet="timeout: 60",
+            source_type="config",
+            relevance_score=0.5,
+            reliability_score=0.0
+        )
+
+        long_source = SourceCandidate(
+            uri="config.yaml",
+            snippet="# Configuration file with detailed settings\ntimeout: 60\nmax_retries: 3\n# See docs for more info",
+            source_type="config",
+            relevance_score=0.5,
+            reliability_score=0.0
+        )
+
+        short_score = scorer.score(short_source)
+        long_score = scorer.score(long_source)
+
+        # Short snippet should be penalized
+        assert long_score >= short_score
+
+
+class TestResearcher:
+    """Tests for Researcher evidence retrieval."""
+
+    def test_researcher_initialization(self):
+        """Researcher should initialize with KB and default sources."""
+        kb = KnowledgeBase()
+        researcher = Researcher(kb)
+
+        assert researcher.kb is kb
+        assert 'repo' in researcher.allowed_sources
+        assert 'docs' in researcher.allowed_sources
+        assert researcher._retrieval_count == 0
+
+    def test_retrieve_for_missing_claim(self):
+        """Should return error for non-existent claim."""
+        kb = KnowledgeBase()
+        researcher = Researcher(kb)
+
+        async def _run():
+            return await researcher.retrieve_for_claims(["nonexistent_claim_id"])
+
+        results = asyncio.run(_run())
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "not found" in results[0].error
+
+    def test_retrieve_extracts_search_terms(self):
+        """Retrieval should extract and use search terms."""
+        kb = KnowledgeBase()
+        claim = kb.add_claim(
+            "The KnowledgeBase tracks evidence coverage",
+            "claude",
+            0.8
+        )
+
+        researcher = Researcher(kb, allowed_sources=[])  # Empty sources to skip actual search
+
+        async def _run():
+            return await researcher.retrieve_for_claims([claim.id])
+
+        results = asyncio.run(_run())
+
+        assert len(results) == 1
+        # Should have extracted terms even if no sources found
+        assert "KnowledgeBase" in results[0].search_terms or len(results[0].search_terms) > 0
+
+    def test_get_stats(self):
+        """Should return retrieval statistics."""
+        kb = KnowledgeBase()
+        researcher = Researcher(kb)
+
+        stats = researcher.get_stats()
+
+        assert 'retrieval_count' in stats
+        assert 'sources_added' in stats
+        assert 'allowed_sources' in stats
+        assert 'sources_in_kb' in stats
+
+    def test_verify_claim_without_query_fn(self):
+        """Cross-model verification should work with evidence-based fallback."""
+        kb = KnowledgeBase()
+        claim = kb.add_claim("Test claim", "claude", 0.8)
+        source = kb.add_source("https://example.com", "Supporting evidence", "web", 0.9, 0.8)
+        kb.link_evidence_to_claim(claim.id, source.id, supports=True)
+
+        researcher = Researcher(kb)
+
+        async def _run():
+            return await researcher.verify_claim_cross_model(claim.id)
+
+        is_verified, confidence, rationale = asyncio.run(_run())
+
+        assert is_verified is True
+        assert confidence > 0
+        assert "supporting" in rationale.lower()
+
+    def test_verify_unsupported_claim(self):
+        """Verification should fail for claims without evidence."""
+        kb = KnowledgeBase()
+        claim = kb.add_claim("Unsupported claim", "claude", 0.8)
+
+        researcher = Researcher(kb)
+
+        async def _run():
+            return await researcher.verify_claim_cross_model(claim.id)
+
+        is_verified, confidence, rationale = asyncio.run(_run())
+
+        assert is_verified is False
+        assert "no supporting" in rationale.lower()
+
+
+class TestRetrievalRequest:
+    """Tests for RetrievalRequest data class."""
+
+    def test_default_source_types(self):
+        """RetrievalRequest should default to local sources."""
+        request = RetrievalRequest(
+            target_id="claim_1",
+            target_text="Test claim"
+        )
+
+        assert 'repo' in request.source_types
+        assert 'docs' in request.source_types
+
+    def test_custom_source_types(self):
+        """RetrievalRequest should accept custom source types."""
+        request = RetrievalRequest(
+            target_id="claim_1",
+            target_text="Test claim",
+            source_types=['web']
+        )
+
+        assert request.source_types == ['web']
+
+    def test_max_sources_default(self):
+        """RetrievalRequest should have default max_sources."""
+        request = RetrievalRequest(
+            target_id="claim_1",
+            target_text="Test claim"
+        )
+
+        assert request.max_sources == 3
+
+
+class TestRetrievalResult:
+    """Tests for RetrievalResult data class."""
+
+    def test_to_dict(self):
+        """RetrievalResult should serialize to dict."""
+        kb = KnowledgeBase()
+        source = kb.add_source("test.py", "code snippet", "repo", 0.8, 0.7)
+
+        result = RetrievalResult(
+            target_id="claim_1",
+            sources_found=[source],
+            success=True,
+            latency_ms=150,
+            search_terms=["test", "code"]
+        )
+
+        data = result.to_dict()
+
+        assert data['target_id'] == "claim_1"
+        assert data['success'] is True
+        assert data['latency_ms'] == 150
+        assert len(data['sources_found']) == 1
+        assert data['search_terms'] == ["test", "code"]
