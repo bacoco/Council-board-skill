@@ -368,6 +368,9 @@ Reference guides in `skills/council/references/`:
 
 ## Recent Improvements
 
+- [x] **Real Evidence Retrieval** — Researcher agent now performs actual repo/doc search with term extraction
+- [x] **Source Reliability Scoring** — Multi-factor scoring (source type, authority indicators, snippet quality)
+- [x] **Key Term Extraction** — Intelligent extraction of CamelCase, snake_case, acronyms from claims
 - [x] **STORM Pipeline** — Evidence-grounded workflow graphs (decision, research, code-review)
 - [x] **KnowledgeBase** — Shared artifact tracking claims, sources, and decisions
 - [x] **Evidence-aware Convergence** — Confidence factors in evidence coverage
@@ -395,8 +398,11 @@ Future improvements identified by Council self-evaluation:
 - [x] **Core Logic Tests** — Unit tests for deliberation engine, convergence algorithm, persona generation
 - [x] **STORM Workflows** — Decision, Research, Code Review graphs with evidence tracking
 - [x] **KnowledgeBase** — Shared artifact for claims, sources, and decisions
+- [x] **Source Reliability** — Multi-factor reliability scoring for retrieved evidence
+- [x] **Real Evidence Retrieval** — Repo/doc search with key term extraction
+- [ ] **Cross-Model Verification** — Query multiple models to independently verify claims
+- [ ] **Web Retrieval** — Web search integration for external evidence
 - [ ] **Persistent State** — Save circuit breaker state, metrics, adaptive timeouts across sessions (JSON/SQLite)
-- [ ] **Source Reliability** — Model-judged reliability scoring for retrieved evidence
 - [ ] **CI/CD Pipeline** — GitHub Actions, automated testing, version compatibility matrix
 - [ ] **Benchmarks** — Compare output quality/cost/latency vs single-model baselines
 

@@ -101,7 +101,7 @@
 - ✅ **Pipeline Abstraction** — Classic vs STORM dual-mode system (`pipelines/base.py`, `classic.py`, `storm.py`)
 - ✅ **KnowledgeBase** — Full implementation with Claims, Sources, Decisions, OpenQuestions (`knowledge_base.py`)
 - ✅ **Moderator Agent** — Workflow detection, shallow consensus detection, routing (`agents/moderator.py`)
-- ✅ **Researcher Agent** — Evidence retrieval stub (`agents/researcher.py`)
+- ✅ **Researcher Agent** — Full implementation with repo/doc search (`agents/researcher.py`)
 - ✅ **Evidence Judge** — Claim evaluation, confidence adjustment (`agents/evidence_judge.py`)
 - ✅ **Convergence Detector** — Classic + evidence-aware modes (`convergence.py`)
 - ✅ **Decision Graph** — 5 nodes with model queries: options → rubric → red-team → evidence → recommendation (`workflows/decision.py`)
@@ -114,10 +114,19 @@
 - ✅ **Prompt Templates** — All workflow agent prompts (`prompts/storm_prompts.py`)
 - ✅ **Model Query Helpers** — Parallel queries, response parsing (`workflows/model_query.py`)
 
+### Phase 2.5 — ✅ IMPLEMENTED
+- ✅ **Real Evidence Retrieval** — Researcher now performs actual retrieval:
+  - `KeyTermExtractor` — Extracts technical terms (CamelCase, snake_case, acronyms), filters stop words
+  - `RepoSearcher` — Async grep-based repository search with relevance scoring
+  - `DocSearcher` — Pattern-based documentation search with context extraction
+  - `SourceReliabilityScorer` — Multi-factor reliability scoring (source type, authority indicators)
+- ✅ **Cross-Model Verification** — Basic verification based on evidence coverage (full model-based verification pending)
+
 ### Phase 3 — 🔲 PLANNED
 - Optional persistence across sessions
 - UI/mind-map visualization
-- Source reliability scoring improvements
+- Full cross-model claim verification (query multiple models independently)
+- Web retrieval integration
 
 ## 14) Implementation Notes
 
